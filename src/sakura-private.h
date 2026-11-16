@@ -800,6 +800,7 @@ void sakura_install_codex_hook_cb(GtkWidget *widget, void *data);
 void sakura_close_tab_cb(GtkWidget *widget, void *data);
 void sakura_sidebar_init(gboolean restore_session);
 void sakura_sidebar_bookmarks_refresh(void);
+void sakura_add_command_bookmark_cb(GtkMenuItem *item, gpointer data);
 void sakura_sidebar_selection_changed_cb(GtkTreeSelection *selection, void *data);
 void sakura_sidebar_primary_click(SakuraSidebarNode *node);
 void sakura_sidebar_cancel_primary_click(void);

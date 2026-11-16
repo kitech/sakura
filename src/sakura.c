@@ -2920,7 +2920,7 @@ sakura_codex_reasoning_menu_new(void)
 static void
 sakura_init_popup()
 {
-	GtkWidget *item_new_tab, *item_tools, *item_open_here,
+	GtkWidget *item_new_tab, *item_add_bookmark, *item_tools, *item_open_here,
 	          *item_gitui, *item_git_cola, *item_gh_dash, *item_open_pr,
 	          *item_set_name, *item_close_tab, *item_pane, *item_copy,
 	          *item_paste, *item_select_text, *item_fullscreen,
@@ -3100,6 +3100,10 @@ sakura_init_popup()
 	gtk_menu_shell_append(GTK_MENU_SHELL(sakura.menu), item_copy);
 	gtk_menu_shell_append(GTK_MENU_SHELL(sakura.menu), item_paste);
 	gtk_menu_shell_append(GTK_MENU_SHELL(sakura.menu), item_select_text);
+	item_add_bookmark = gtk_menu_item_new_with_label(_("Add bookmark"));
+	g_signal_connect(item_add_bookmark, "activate",
+	                 G_CALLBACK(sakura_add_command_bookmark_cb), NULL);
+	gtk_menu_shell_append(GTK_MENU_SHELL(sakura.menu), item_add_bookmark);
 	gtk_menu_shell_append(GTK_MENU_SHELL(sakura.menu), gtk_separator_menu_item_new());
 	gtk_menu_shell_append(GTK_MENU_SHELL(sakura.menu), item_new_tab);
 	gtk_menu_shell_append(GTK_MENU_SHELL(sakura.menu), item_pane);

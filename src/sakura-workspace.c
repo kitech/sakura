@@ -2685,6 +2685,14 @@ sakura_sidebar_context_menu_new (struct sakura_sidebar_node *node)
 		context_node = context_node->page->active_tab->sidebar_node;
 
 	menu = gtk_menu_new();
+	/* Available for every row type: adds the row context to the bookmark
+	 * list. It never executes anything. */
+	item = gtk_menu_item_new_with_label(_("Add bookmark"));
+	g_signal_connect(item, "activate",
+	                 G_CALLBACK(sakura_add_command_bookmark_cb), NULL);
+	gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+	gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
+
 	if (context_node != NULL && context_node->type == SAKURA_SIDEBAR_TASK) {
 		item = gtk_menu_item_new_with_label(_("New terminal"));
 		sakura_sidebar_connect_context_action(
@@ -5833,14 +5841,13 @@ sakura_bookmark_dialog_response_cb(GtkDialog *dialog, gint response_id,
 
 
 static void
-sakura_bookmark_edit_cb(GtkMenuItem *item, gpointer data)
+sakura_bookmark_dialog_open(const SakuraSessionBookmarkRecord *bookmark,
+                            const gchar *initial_command)
 {
-	SakuraSessionBookmarkRecord *bookmark = data;
 	struct sakura_bookmark_dialog_state *state =
 		g_new0(struct sakura_bookmark_dialog_state, 1);
 	GtkWidget *content, *box, *label;
 
-	(void)item;
 	state->id = g_strdup(bookmark != NULL ? bookmark->id : NULL);
 	state->dialog = gtk_dialog_new_with_buttons(
 		bookmark != NULL ? _("Edit command bookmark")
@@ -5849,6 +5856,9 @@ sakura_bookmark_edit_cb(GtkMenuItem *item, gpointer data)
 		GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
 		_("_Cancel"), GTK_RESPONSE_REJECT,
 		_("_Save"), GTK_RESPONSE_ACCEPT, NULL);
+	/* Enter saves from either entry; Escape still cancels via GtkDialog. */
+	gtk_dialog_set_default_response(GTK_DIALOG(state->dialog),
+	                                GTK_RESPONSE_ACCEPT);
 	content = gtk_dialog_get_content_area(GTK_DIALOG(state->dialog));
 	box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
 	gtk_container_set_border_width(GTK_CONTAINER(box), 8);
@@ -5858,23 +5868,61 @@ sakura_bookmark_edit_cb(GtkMenuItem *item, gpointer data)
 	gtk_label_set_xalign(GTK_LABEL(label), 0.0);
 	gtk_box_pack_start(GTK_BOX(box), label, FALSE, FALSE, 0);
 	state->name_entry = gtk_entry_new();
+	gtk_entry_set_activates_default(GTK_ENTRY(state->name_entry), TRUE);
 	gtk_entry_set_text(GTK_ENTRY(state->name_entry),
 	                   bookmark != NULL && bookmark->name != NULL
-	                   ? bookmark->name : "");
+	                   ? bookmark->name
+	                   : (initial_command != NULL ? initial_command : ""));
 	gtk_box_pack_start(GTK_BOX(box), state->name_entry, FALSE, FALSE, 0);
 
 	label = gtk_label_new(_("Command"));
 	gtk_label_set_xalign(GTK_LABEL(label), 0.0);
 	gtk_box_pack_start(GTK_BOX(box), label, FALSE, FALSE, 0);
 	state->command_entry = gtk_entry_new();
+	gtk_entry_set_activates_default(GTK_ENTRY(state->command_entry), TRUE);
 	gtk_entry_set_text(GTK_ENTRY(state->command_entry),
 	                   bookmark != NULL && bookmark->command != NULL
-	                   ? bookmark->command : "");
+	                   ? bookmark->command
+	                   : (initial_command != NULL ? initial_command : ""));
 	gtk_box_pack_start(GTK_BOX(box), state->command_entry, FALSE, FALSE, 0);
 
 	g_signal_connect(state->dialog, "response",
 	                 G_CALLBACK(sakura_bookmark_dialog_response_cb), state);
+	gtk_widget_grab_focus(state->name_entry);
 	gtk_widget_show_all(state->dialog);
+}
+
+
+static void
+sakura_bookmark_edit_cb(GtkMenuItem *item, gpointer data)
+{
+	(void)item;
+	sakura_bookmark_dialog_open(data, NULL);
+}
+
+
+/* Context-menu entry: save the terminal selection to the bookmark list. It
+ * never executes the command. */
+void
+sakura_add_command_bookmark_cb(GtkMenuItem *item, gpointer data)
+{
+	SakuraTab *tab = sakura.workspace != NULL
+	               ? sakura.workspace->active_tab : NULL;
+	gchar *selected = NULL;
+
+	(void)item;
+	(void)data;
+	if (tab != NULL && tab->vte != NULL &&
+	    vte_terminal_get_has_selection(VTE_TERMINAL(tab->vte)))
+		selected = vte_terminal_get_text_selected(VTE_TERMINAL(tab->vte),
+		                                          VTE_FORMAT_TEXT);
+	if (selected != NULL) {
+		g_strstrip(selected);
+		if (selected[0] == '\0')
+			g_clear_pointer(&selected, g_free);
+	}
+	sakura_bookmark_dialog_open(NULL, selected);
+	g_free(selected);
 }
 
 
@@ -5919,6 +5967,18 @@ sakura_bookmarks_menu_item_new(const gchar *label, GCallback callback,
 	                  GINT_TO_POINTER(execute ? 1 : 0));
 	g_signal_connect(item, "activate", callback, data);
 	return item;
+}
+
+
+static gboolean
+sakura_bookmarks_button_press_cb(GtkWidget *widget, GdkEvent *event,
+                                 gpointer data)
+{
+	(void)widget;
+	(void)event;
+	(void)data;
+	sakura_sidebar_bookmarks_refresh();
+	return FALSE; /* let GtkMenuButton toggle and pop the menu */
 }
 
 
@@ -5997,7 +6057,7 @@ sakura_sidebar_bookmarks_refresh(void)
 	gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
 	gtk_menu_shell_append(GTK_MENU_SHELL(menu),
 	                      sakura_bookmarks_menu_item_new(
-		                      _("Add command…"),
+		                      _("Add bookmark…"),
 		                      G_CALLBACK(sakura_bookmark_edit_cb), NULL, TRUE));
 	gtk_widget_show_all(menu);
 }
@@ -6145,8 +6205,11 @@ sakura_sidebar_init (gboolean restore_session)
 	gtk_button_set_relief(GTK_BUTTON(bookmarks_button), GTK_RELIEF_NONE);
 	gtk_widget_set_tooltip_text(bookmarks_button, _("Command bookmarks"));
 	sakura.bookmarks_menu = gtk_menu_new();
-	g_signal_connect_swapped(sakura.bookmarks_menu, "deactivate",
-	                         G_CALLBACK(sakura_sidebar_bookmarks_refresh), NULL);
+	/* Rebuild the menu before GtkMenuButton pops it. Rebuilding on
+	 * "deactivate" destroys item widgets before their "activate" handlers run,
+	 * which silently breaks Add/Edit/Delete. */
+	g_signal_connect(bookmarks_button, "button-press-event",
+	                 G_CALLBACK(sakura_bookmarks_button_press_cb), NULL);
 	gtk_menu_button_set_popup(GTK_MENU_BUTTON(bookmarks_button),
 	                          sakura.bookmarks_menu);
 	gtk_box_pack_start(GTK_BOX(toolbar), bookmarks_button, FALSE, FALSE, 0);
