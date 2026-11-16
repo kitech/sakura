@@ -1,5 +1,8 @@
 #include <libintl.h>
 #include <stdarg.h>
+#include <unistd.h>
+
+#include <glib/gstdio.h>
 
 #include "sakura-private.h"
 
@@ -5789,6 +5792,8 @@ struct sakura_bookmark_dialog_state {
 	GtkWidget *dialog;
 	GtkWidget *name_entry;
 	GtkWidget *command_entry;
+	GtkWidget *syntax_label;
+	guint syntax_timeout_id;
 };
 
 /* In GTK3 a menu attached to a GtkMenuButton is not part of the widget tree,
@@ -5840,6 +5845,160 @@ sakura_bookmark_dialog_response_cb(GtkDialog *dialog, gint response_id,
 }
 
 
+/* Ad-hoc POSIX syntax check for a bookmark command. It never executes the
+ * command; `sh -n` only parses it. Async so a pathological string cannot
+ * stall the UI, and the result is ignored when the field changed meanwhile. */
+struct sakura_bookmark_syntax_job {
+	GtkWidget *label; /* strong reference: the dialog may close first */
+	guint generation;
+	gchar *path;
+};
+
+static void
+sakura_bookmark_syntax_check_done(GObject *source, GAsyncResult *result,
+                                  gpointer data)
+{
+	struct sakura_bookmark_syntax_job *job = data;
+	GSubprocess *process = G_SUBPROCESS(source);
+	g_autofree gchar *stderr_text = NULL;
+	gboolean communicated;
+	gboolean ok;
+	guint current;
+
+	communicated = g_subprocess_communicate_utf8_finish(process, result, NULL,
+	                                                    &stderr_text, NULL);
+	ok = communicated && g_subprocess_get_successful(process);
+	current = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(job->label),
+	                                             "sakura-syntax-generation"));
+	if (job->generation == current) {
+		if (ok) {
+			gtk_label_set_markup(GTK_LABEL(job->label),
+			                     "<small>POSIX syntax OK</small>");
+		} else {
+			const gchar *message = stderr_text;
+			const gchar *colon;
+
+			if (message == NULL || message[0] == '\0')
+				message = _("invalid command");
+			/* Drop the temporary file path sh prefixes the diagnostic
+			 * with; it is meaningless in the dialog. */
+			if (job->path != NULL &&
+			    g_str_has_prefix(message, job->path) &&
+			    (colon = strchr(message + strlen(job->path), ':')) != NULL)
+				message = colon + 1;
+			while (*message == ' ')
+				message++;
+			g_autofree gchar *escaped = g_markup_escape_text(message, -1);
+			g_autofree gchar *markup = g_strdup_printf(
+				"<small><span foreground=\"red\">Syntax: %s</span></small>",
+				escaped);
+			gtk_label_set_markup(GTK_LABEL(job->label), markup);
+		}
+		gtk_widget_show(job->label);
+	}
+	if (job->path != NULL)
+		g_unlink(job->path);
+	g_free(job->path);
+	g_object_unref(job->label);
+	g_free(job);
+}
+
+
+static void
+sakura_bookmark_syntax_check_start(GtkWidget *label, const gchar *command)
+{
+	struct sakura_bookmark_syntax_job *job;
+	GSubprocess *process;
+	GError *error = NULL;
+	gchar *path = NULL;
+	gint fd;
+
+	if (label == NULL || command == NULL || command[0] == '\0') {
+		if (label != NULL)
+			gtk_widget_hide(label);
+		return;
+	}
+	fd = g_file_open_tmp("sakura-bookmark-XXXXXX", &path, &error);
+	if (fd < 0) {
+		g_clear_error(&error);
+		return;
+	}
+	if (write(fd, command, strlen(command)) < 0) {
+		close(fd);
+		g_unlink(path);
+		g_free(path);
+		return;
+	}
+	close(fd);
+	process = g_subprocess_new(G_SUBPROCESS_FLAGS_STDOUT_SILENCE |
+	                           G_SUBPROCESS_FLAGS_STDERR_PIPE,
+	                           &error, "sh", "-n", path, NULL);
+	if (process == NULL) {
+		g_clear_error(&error);
+		g_unlink(path);
+		g_free(path);
+		return;
+	}
+	job = g_new0(struct sakura_bookmark_syntax_job, 1);
+	job->label = g_object_ref(label);
+	job->path = path;
+	job->generation = GPOINTER_TO_UINT(g_object_get_data(
+		G_OBJECT(label), "sakura-syntax-generation"));
+	g_subprocess_communicate_utf8_async(process, NULL, NULL,
+	                                    sakura_bookmark_syntax_check_done, job);
+	g_object_unref(process);
+}
+
+
+static gboolean
+sakura_bookmark_syntax_check_timeout(gpointer data)
+{
+	struct sakura_bookmark_dialog_state *state = data;
+
+	state->syntax_timeout_id = 0;
+	sakura_bookmark_syntax_check_start(
+		state->syntax_label,
+		gtk_entry_get_text(GTK_ENTRY(state->command_entry)));
+	return G_SOURCE_REMOVE;
+}
+
+
+static void
+sakura_bookmark_command_changed_cb(GtkEditable *editable, gpointer data)
+{
+	struct sakura_bookmark_dialog_state *state = data;
+	guint generation;
+
+	(void)editable;
+	if (state->syntax_label == NULL)
+		return;
+	generation = GPOINTER_TO_UINT(g_object_get_data(
+		G_OBJECT(state->syntax_label), "sakura-syntax-generation")) + 1;
+	g_object_set_data(G_OBJECT(state->syntax_label),
+	                  "sakura-syntax-generation",
+	                  GUINT_TO_POINTER(generation));
+	if (state->syntax_timeout_id != 0)
+		g_source_remove(state->syntax_timeout_id);
+	gtk_widget_hide(state->syntax_label);
+	state->syntax_timeout_id = g_timeout_add(400,
+	                                         sakura_bookmark_syntax_check_timeout,
+	                                         state);
+}
+
+
+static void
+sakura_bookmark_dialog_destroy_cb(GtkWidget *widget, gpointer data)
+{
+	struct sakura_bookmark_dialog_state *state = data;
+
+	(void)widget;
+	if (state->syntax_timeout_id != 0) {
+		g_source_remove(state->syntax_timeout_id);
+		state->syntax_timeout_id = 0;
+	}
+}
+
+
 static void
 sakura_bookmark_dialog_open(const SakuraSessionBookmarkRecord *bookmark,
                             const gchar *initial_command)
@@ -5886,10 +6045,22 @@ sakura_bookmark_dialog_open(const SakuraSessionBookmarkRecord *bookmark,
 	                   : (initial_command != NULL ? initial_command : ""));
 	gtk_box_pack_start(GTK_BOX(box), state->command_entry, FALSE, FALSE, 0);
 
+	state->syntax_label = gtk_label_new(NULL);
+	gtk_label_set_xalign(GTK_LABEL(state->syntax_label), 0.0);
+	gtk_widget_set_no_show_all(state->syntax_label, TRUE);
+	gtk_box_pack_start(GTK_BOX(box), state->syntax_label, FALSE, FALSE, 0);
+
 	g_signal_connect(state->dialog, "response",
 	                 G_CALLBACK(sakura_bookmark_dialog_response_cb), state);
+	g_signal_connect(state->dialog, "destroy",
+	                 G_CALLBACK(sakura_bookmark_dialog_destroy_cb), state);
+	g_signal_connect(state->command_entry, "changed",
+	                 G_CALLBACK(sakura_bookmark_command_changed_cb), state);
 	gtk_widget_grab_focus(state->name_entry);
 	gtk_widget_show_all(state->dialog);
+	/* Give a prefilled command the same advisory check. */
+	sakura_bookmark_command_changed_cb(
+		GTK_EDITABLE(state->command_entry), state);
 }
 
 
