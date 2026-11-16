@@ -349,11 +349,6 @@ sakura_open_here_menu_new(void)
 	GtkWidget *menu, *item;
 
 	menu = gtk_menu_new();
-	/* The sidebar init calls gtk_widget_show_all() on the whole sidebar,
-	 * which would also realize this popup menu. Popping up an already
-	 * shown menu leaves a stuck grab: the menu never maps and the whole
-	 * UI freezes. Keep it hidden until it is popped up. */
-	gtk_widget_set_no_show_all(menu, TRUE);
 	item = gtk_menu_item_new_with_label(_("File Manager"));
 	g_signal_connect(item, "activate", G_CALLBACK(sakura_open_here_cb),
 	                 GINT_TO_POINTER(SAKURA_OPEN_HERE_FILE_MANAGER));
@@ -362,6 +357,12 @@ sakura_open_here_menu_new(void)
 	g_signal_connect(item, "activate", G_CALLBACK(sakura_open_here_cb),
 	                 GINT_TO_POINTER(SAKURA_OPEN_HERE_EDITOR));
 	gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+	/* A menu attached to a GtkMenuButton is not part of the widget tree, so
+	 * gtk_widget_show_all() on the window never reaches it. Without this its
+	 * items stay invisible, the popped-up menu is 0x0, and the menu's grab
+	 * freezes the whole UI. GtkMenu::show_all shows the items but not the
+	 * menu itself. */
+	gtk_widget_show_all(menu);
 	return menu;
 }
 

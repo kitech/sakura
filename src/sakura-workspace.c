@@ -5899,9 +5899,10 @@ sakura_sidebar_init (gboolean restore_session)
 	tool_item = gtk_menu_item_new_with_label(_("Open pull request..."));
 	g_signal_connect(tool_item, "activate", G_CALLBACK(sakura_open_pr_cb), NULL);
 	gtk_menu_shell_append(GTK_MENU_SHELL(tools_menu), tool_item);
-	/* Same reason as sakura_open_here_menu_new(): must not be revealed by
-	 * the sidebar's gtk_widget_show_all(). */
-	gtk_widget_set_no_show_all(tools_menu, TRUE);
+	/* See sakura_open_here_menu_new(): the menu attached to this popup button
+	 * is outside the widget tree, so its items must be shown explicitly or the
+	 * popped-up menu is empty and its grab freezes the UI. */
+	gtk_widget_show_all(tools_menu);
 	gtk_menu_button_set_popup(GTK_MENU_BUTTON(tools_button), tools_menu);
 	gtk_box_pack_start(GTK_BOX(toolbar), tools_button, FALSE, FALSE, 0);
 	open_here_button = gtk_menu_button_new();
