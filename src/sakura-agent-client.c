@@ -146,6 +146,10 @@ typedef struct {
 	guint status;
 	gchar *message;
 	gboolean output;
+	gboolean activity;
+	gboolean command_running;
+	guint progress_state;
+	guint progress_percent;
 } SakuraAgentTerminalEvent;
 
 
@@ -829,6 +833,10 @@ sakura_agent_apply_terminal_event(SakuraAgentTerminalEvent *event)
 			sakura_tab_agent_feed_output(tab, event->data, event->data_length,
 			                              event->start_offset,
 			                              event->end_offset);
+		else if (event->activity)
+			sakura_tab_set_command_activity(tab, event->command_running,
+			                                event->progress_state,
+			                                event->progress_percent);
 		else
 			sakura_tab_agent_status(tab, event->status, event->message);
 	}
@@ -1040,6 +1048,23 @@ sakura_agent_event_thread(gpointer data)
 					g_clear_pointer(&payload, g_byte_array_unref);
 					continue;
 				}
+				g_clear_error(&error);
+				g_free(terminal_event->terminal_id);
+				g_free(terminal_event->message);
+				terminal_event->terminal_id = NULL;
+				terminal_event->message = NULL;
+				if (sakura_control_decode_terminal_activity_event(
+						payload->data, payload->len, &terminal_sequence,
+						&terminal_event->terminal_id,
+						&terminal_event->command_running,
+						&terminal_event->progress_state,
+						&terminal_event->progress_percent, &error)) {
+					terminal_event->activity = TRUE;
+					sakura_agent_queue_terminal_event(app, terminal_event);
+					g_clear_pointer(&payload, g_byte_array_unref);
+					continue;
+				}
+				g_clear_error(&error);
 				g_free(terminal_event->terminal_id);
 				g_free(terminal_event->message);
 				g_free(terminal_event);

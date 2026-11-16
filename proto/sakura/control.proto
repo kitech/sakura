@@ -463,11 +463,19 @@ message TerminalStatusChanged {
   string message = 3;
 }
 
+message TerminalActivityChanged {
+  string terminal_id = 1;
+  bool command_running = 2;
+  uint32 progress_state = 3;
+  uint32 progress_percent = 4;
+}
+
 message Event {
   uint64 sequence = 1;
   oneof body {
     WorkspaceChanged workspace_changed = 2;
     TerminalOutput terminal_output = 3;
     TerminalStatusChanged terminal_status_changed = 4;
+    TerminalActivityChanged terminal_activity_changed = 5;
   }
 }

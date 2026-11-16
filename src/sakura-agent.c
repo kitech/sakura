@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include <sys/wait.h>
+#include <termios.h>
 #include <unistd.h>
 
 #include <gio/gio.h>
@@ -45,6 +46,13 @@ typedef struct {
 	GPid pid;
 	GThread *reader_thread;
 	gboolean stopping;
+	/* Runtime activity state; never persisted. */
+	gboolean command_running;
+	guint progress_state;
+	guint progress_percent;
+	gboolean activity_from_osc133;
+	GPid last_foreground_pgid;
+	GByteArray *osc_scan_buffer;
 } SakuraAgentTerminal;
 
 typedef struct {
@@ -105,6 +113,7 @@ struct _SakuraAgent {
 	gchar *workspace_path;
 	gchar *tracking_dir;
 	guint jobs_timer_id;
+	guint activity_timer_id;
 };
 
 
@@ -875,6 +884,7 @@ sakura_agent_terminal_free(SakuraAgentTerminal *terminal)
 	}
 	g_free(terminal->id);
 	g_clear_pointer(&terminal->output_buffer, g_byte_array_unref);
+	g_clear_pointer(&terminal->osc_scan_buffer, g_byte_array_unref);
 	g_free(terminal);
 }
 
@@ -896,6 +906,222 @@ sakura_agent_terminal_buffer_output(SakuraAgentTerminal *terminal,
 	}
 	terminal->output_start_offset =
 		terminal->output_end_offset - terminal->output_buffer->len;
+}
+
+
+/* Incremental scanner for OSC 133 (command boundaries) and OSC 9;4 (progress).
+ * Runs on the terminal reader thread; the caller holds agent->state_mutex.
+ * Returns TRUE when the visible activity changed. */
+static gboolean
+sakura_agent_terminal_scan_activity(SakuraAgentTerminal *terminal,
+                                    const guint8 *data, gsize length)
+{
+	gboolean changed = FALSE;
+	gboolean running = terminal->command_running;
+	guint progress_state = terminal->progress_state;
+	guint progress_percent = terminal->progress_percent;
+	gsize consumed = 0;
+
+	if (terminal->osc_scan_buffer == NULL)
+		terminal->osc_scan_buffer = g_byte_array_new();
+	g_byte_array_append(terminal->osc_scan_buffer, data, length);
+
+	/* OSC is ESC ] ... terminated by BEL or ESC \. Only parse complete
+	 * sequences and keep the unfinished tail for the next chunk. */
+	for (gsize i = 0; i + 1 < terminal->osc_scan_buffer->len; i++) {
+		const guint8 *p = terminal->osc_scan_buffer->data;
+		gsize end = 0;
+
+		if (p[i] != 0x1b || p[i + 1] != ']')
+			continue;
+		for (gsize j = i + 2; j < terminal->osc_scan_buffer->len; j++) {
+			if (p[j] == 0x07) {
+				end = j + 1;
+				break;
+			}
+			if (p[j] == 0x1b && j + 1 < terminal->osc_scan_buffer->len &&
+			    p[j + 1] == '\\') {
+				end = j + 2;
+				break;
+			}
+		}
+		if (end == 0)
+			break;
+		{
+			g_autofree gchar *body = g_strndup((const gchar *)p + i + 2,
+			                                   (gsize)(end - i - 2));
+
+			body[strcspn(body, "\a\033")] = '\0';
+			if (g_str_has_prefix(body, "133;")) {
+				terminal->activity_from_osc133 = TRUE;
+				if (body[4] == 'A' || body[4] == 'D') {
+					running = FALSE;
+					progress_state = 0;
+					progress_percent = 0;
+				} else if (body[4] == 'C') {
+					running = TRUE;
+					progress_state = 0;
+					progress_percent = 0;
+				}
+			} else if (g_str_has_prefix(body, "9;4;")) {
+				guint st = 0, pct = 0;
+
+				if (sscanf(body + 4, "%u;%u", &st, &pct) >= 1) {
+					if (terminal->activity_from_osc133) {
+						/* The precise boundary source owns the spinner;
+						 * keep only the percentage for the tooltip. */
+						if (st == 1)
+							progress_percent = pct;
+					} else if (st == 3) {
+						running = TRUE;
+						progress_state = 3;
+						progress_percent = 0;
+					} else if (st == 1) {
+						running = TRUE;
+						progress_state = 1;
+						progress_percent = pct;
+					} else if (st == 2) {
+						running = TRUE;
+						progress_state = 2;
+						progress_percent = pct;
+					} else if (st == 0) {
+						running = FALSE;
+						progress_state = 0;
+						progress_percent = 0;
+					}
+				}
+			}
+		}
+		consumed = end;
+		i = end - 1;
+	}
+	if (consumed != 0)
+		g_byte_array_remove_range(terminal->osc_scan_buffer, 0, consumed);
+	/* Bound the tail: an unterminated OSC must not grow forever. */
+	if (terminal->osc_scan_buffer->len > 4096)
+		g_byte_array_remove_range(terminal->osc_scan_buffer, 0,
+		                          terminal->osc_scan_buffer->len - 512);
+
+	if (running != terminal->command_running ||
+	    progress_state != terminal->progress_state ||
+	    progress_percent != terminal->progress_percent) {
+		terminal->command_running = running;
+		terminal->progress_state = progress_state;
+		terminal->progress_percent = progress_percent;
+		changed = TRUE;
+	}
+	return changed;
+}
+
+
+static void
+sakura_agent_broadcast_terminal_activity(SakuraAgent *agent,
+                                         SakuraAgentTerminal *terminal)
+{
+	GByteArray *event = g_byte_array_new();
+
+	if (terminal != NULL &&
+	    sakura_control_encode_terminal_activity_event(
+		    ++agent->sequence, terminal->id, terminal->command_running,
+		    terminal->progress_state, terminal->progress_percent, event))
+		sakura_agent_broadcast_payload(agent, event);
+	g_byte_array_unref(event);
+}
+
+
+/* Fallback for shells without OSC integration: the pty's foreground process
+ * group tells us whether a job is running. Interactive shells put each job in
+ * its own group, but simple commands can stay in the shell's group, so when the
+ * pgids match we also count live members of that group. */
+static gboolean
+sakura_agent_activity_tick(gpointer data)
+{
+	SakuraAgent *agent = data;
+	GHashTable *wanted = g_hash_table_new(g_direct_hash, g_direct_equal);
+	GHashTable *counts = g_hash_table_new(g_direct_hash, g_direct_equal);
+
+	if (agent->stopping) {
+		g_hash_table_unref(counts);
+		g_hash_table_unref(wanted);
+		return G_SOURCE_CONTINUE;
+	}
+	for (guint i = 0; i < agent->terminals->len; i++) {
+		SakuraAgentTerminal *terminal = g_ptr_array_index(agent->terminals, i);
+		pid_t fg;
+
+		if (terminal == NULL || terminal->master_fd < 0 || terminal->pid <= 0 ||
+		    terminal->stopping || terminal->activity_from_osc133)
+			continue;
+		fg = tcgetpgrp(terminal->master_fd);
+		terminal->last_foreground_pgid = fg;
+		if (fg > 0 && fg == getpgid(terminal->pid))
+			g_hash_table_add(wanted, GINT_TO_POINTER(fg));
+	}
+	if (g_hash_table_size(wanted) > 0) {
+		GDir *proc = g_dir_open("/proc", 0, NULL);
+
+		if (proc != NULL) {
+			const gchar *name;
+
+			while ((name = g_dir_read_name(proc)) != NULL) {
+				gchar path[64], buf[512], *paren;
+				gint fd, pgrp = 0;
+				ssize_t n;
+
+				if (!g_ascii_isdigit(name[0]))
+					continue;
+				g_snprintf(path, sizeof(path), "/proc/%s/stat", name);
+				fd = open(path, O_RDONLY);
+				if (fd < 0)
+					continue;
+				n = read(fd, buf, sizeof(buf) - 1);
+				close(fd);
+				if (n <= 0)
+					continue;
+				buf[n] = '\0';
+				paren = strrchr(buf, ')');
+				if (paren == NULL ||
+				    sscanf(paren + 2, "%*c %d", &pgrp) != 1)
+					continue;
+				if (g_hash_table_contains(wanted, GINT_TO_POINTER(pgrp)))
+					g_hash_table_insert(
+						counts, GINT_TO_POINTER(pgrp),
+						GINT_TO_POINTER(GPOINTER_TO_INT(
+							g_hash_table_lookup(counts,
+							                    GINT_TO_POINTER(pgrp))) + 1));
+			}
+			g_dir_close(proc);
+		}
+	}
+	for (guint i = 0; i < agent->terminals->len; i++) {
+		SakuraAgentTerminal *terminal = g_ptr_array_index(agent->terminals, i);
+		gboolean running;
+		pid_t fg, shell_pgid;
+
+		if (terminal == NULL || terminal->master_fd < 0 || terminal->pid <= 0 ||
+		    terminal->stopping || terminal->activity_from_osc133)
+			continue;
+		fg = terminal->last_foreground_pgid;
+		shell_pgid = getpgid(terminal->pid);
+		running = fg > 0 && fg != shell_pgid;
+		if (!running && fg > 0 && fg == shell_pgid)
+			running = GPOINTER_TO_INT(g_hash_table_lookup(
+				          counts, GINT_TO_POINTER(fg))) > 1;
+		if (running != terminal->command_running ||
+		    (!running && terminal->progress_state != 0)) {
+			terminal->command_running = running;
+			if (!running) {
+				terminal->progress_state = 0;
+				terminal->progress_percent = 0;
+			}
+			g_mutex_lock(&agent->state_mutex);
+			sakura_agent_broadcast_terminal_activity(agent, terminal);
+			g_mutex_unlock(&agent->state_mutex);
+		}
+	}
+	g_hash_table_unref(counts);
+	g_hash_table_unref(wanted);
+	return G_SOURCE_CONTINUE;
 }
 
 
@@ -922,6 +1148,9 @@ sakura_agent_terminal_reader(gpointer data)
 			start_offset = terminal->output_end_offset;
 			if (!terminal->stopping)
 				sakura_agent_terminal_buffer_output(terminal, buffer, count);
+			if (!terminal->stopping &&
+			    sakura_agent_terminal_scan_activity(terminal, buffer, count))
+				sakura_agent_broadcast_terminal_activity(agent, terminal);
 			if (!terminal->stopping &&
 			    sakura_control_encode_terminal_output_event_with_offsets(
 				    ++agent->sequence, terminal->id, start_offset,
@@ -3146,6 +3375,18 @@ sakura_agent_connection_thread(gpointer data)
 				initial_event))
 				g_clear_pointer(&initial_event, g_byte_array_unref);
 			subscribed = TRUE;
+			/* Replay live activity so a (re)attached desktop starts with the
+			 * correct spinner state. */
+			for (guint index = 0; index < request->agent->terminals->len;
+			     index++) {
+				SakuraAgentTerminal *activity_terminal =
+					g_ptr_array_index(request->agent->terminals, index);
+
+				if (activity_terminal != NULL &&
+				    activity_terminal->command_running)
+					sakura_agent_broadcast_terminal_activity(
+						request->agent, activity_terminal);
+			}
 		} else if (decoded.kind == SAKURA_CONTROL_REQUEST_GET_SNAPSHOT) {
 			if (sakura_agent_refresh_codex_tracking(request->agent)) {
 				request->agent->workspace_revision++;
@@ -3579,6 +3820,8 @@ main(int argc, char **argv)
 	g_unix_signal_add(SIGTERM, sakura_agent_quit_cb, loop);
 	g_socket_service_start(service);
 	agent.jobs_timer_id = g_timeout_add_seconds(15, sakura_agent_jobs_tick, &agent);
+	agent.activity_timer_id = g_timeout_add(500, sakura_agent_activity_tick,
+	                                        &agent);
 	sakura_agent_jobs_tick(&agent);
 	if (!sakura_control_workspace_publish(agent.workspace_id, socket_path,
 	                                     session_path, &error)) {
@@ -3589,6 +3832,8 @@ main(int argc, char **argv)
 	g_main_loop_run(loop);
 	if (agent.jobs_timer_id != 0)
 		g_source_remove(agent.jobs_timer_id);
+	if (agent.activity_timer_id != 0)
+		g_source_remove(agent.activity_timer_id);
 	for (guint index = 0; index < agent.job_runs->len; index++) {
 		SakuraAgentJobRun *run = g_ptr_array_index(agent.job_runs, index);
 		g_subprocess_force_exit(run->process);

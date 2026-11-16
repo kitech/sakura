@@ -569,6 +569,11 @@ struct sakura_tab {
 	gboolean runtime_deferred;
 	gboolean runtime_start_pending;
 	guint runtime_start_source_id;
+	guint activity_show_source_id;
+	gboolean command_running;
+	gboolean is_active_tab;
+	guint progress_state;
+	guint progress_percent;
 	guint order;
 	gboolean has_order;
 #ifdef HAVE_WEBKITGTK
@@ -679,6 +684,10 @@ void sakura_set_window_title(const gchar *title);
 gboolean sakura_update_tab_cwd(SakuraTab *tab);
 void sakura_tab_run_command(SakuraTab *tab, const gchar *command,
                             gboolean execute);
+void sakura_tab_set_command_activity(SakuraTab *tab, gboolean running,
+                                     guint progress_state,
+                                     guint progress_percent);
+void sakura_tab_refresh_activity_spinners(void);
 void sakura_update_tab_metadata(SakuraTab *tab, const gchar *raw_title);
 gboolean sakura_terminal_id_is_valid(const gchar *terminal_id);
 gchar *sakura_generate_terminal_id(void);

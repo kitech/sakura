@@ -2415,6 +2415,29 @@ sakura_control_encode_terminal_status_event(guint64 sequence,
 
 
 gboolean
+sakura_control_encode_terminal_activity_event(
+	guint64 sequence, const gchar *terminal_id, gboolean command_running,
+	guint progress_state, guint progress_percent, GByteArray *payload)
+{
+	Sakura__Control__V1__TerminalActivityChanged changed =
+		SAKURA__CONTROL__V1__TERMINAL_ACTIVITY_CHANGED__INIT;
+	Sakura__Control__V1__Event event = SAKURA__CONTROL__V1__EVENT__INIT;
+
+	if (payload == NULL || terminal_id == NULL || terminal_id[0] == '\0')
+		return FALSE;
+	changed.terminal_id = (gchar *)terminal_id;
+	changed.command_running = command_running;
+	changed.progress_state = progress_state;
+	changed.progress_percent = progress_percent;
+	event.sequence = sequence;
+	event.body_case =
+		SAKURA__CONTROL__V1__EVENT__BODY_TERMINAL_ACTIVITY_CHANGED;
+	event.terminal_activity_changed = &changed;
+	return sakura_control_pack_message(&event.base, payload);
+}
+
+
+gboolean
 sakura_control_decode_response(const guint8 *payload,
 	                             gsize payload_length,
 	                             SakuraControlResponse *response,
@@ -2815,6 +2838,51 @@ sakura_control_decode_terminal_output_event_with_offsets(
 		memcpy(*data, output->data.data, *data_length);
 	}
 	*final_chunk = output->final_chunk;
+	sakura__control__v1__event__free_unpacked(decoded, NULL);
+	return TRUE;
+}
+
+
+gboolean
+sakura_control_decode_terminal_activity_event(const guint8 *payload,
+                                             gsize payload_length,
+                                             guint64 *sequence,
+                                             gchar **terminal_id,
+                                             gboolean *command_running,
+                                             guint *progress_state,
+                                             guint *progress_percent,
+                                             GError **error)
+{
+	Sakura__Control__V1__Event *decoded;
+	Sakura__Control__V1__TerminalActivityChanged *changed;
+
+	if (payload == NULL || sequence == NULL || terminal_id == NULL)
+		return sakura_control_error(error, "invalid terminal activity event");
+	*terminal_id = NULL;
+	if (command_running != NULL)
+		*command_running = FALSE;
+	if (progress_state != NULL)
+		*progress_state = 0;
+	if (progress_percent != NULL)
+		*progress_percent = 0;
+	decoded = sakura__control__v1__event__unpack(NULL, payload_length, payload);
+	if (decoded == NULL ||
+	    decoded->body_case !=
+			SAKURA__CONTROL__V1__EVENT__BODY_TERMINAL_ACTIVITY_CHANGED ||
+	    decoded->terminal_activity_changed == NULL) {
+		if (decoded != NULL)
+			sakura__control__v1__event__free_unpacked(decoded, NULL);
+		return sakura_control_error(error, "unsupported terminal activity event");
+	}
+	changed = decoded->terminal_activity_changed;
+	*sequence = decoded->sequence;
+	*terminal_id = g_strdup(changed->terminal_id);
+	if (command_running != NULL)
+		*command_running = changed->command_running;
+	if (progress_state != NULL)
+		*progress_state = changed->progress_state;
+	if (progress_percent != NULL)
+		*progress_percent = changed->progress_percent;
 	sakura__control__v1__event__free_unpacked(decoded, NULL);
 	return TRUE;
 }

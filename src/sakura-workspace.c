@@ -1455,6 +1455,7 @@ sakura_select_pane (struct sakura_tab *sk_tab, gboolean focus)
 
 	sakura_workspace_mark_changed(SAKURA_WORKSPACE_CHANGE_SELECTION);
 	sakura_sidebar_update_page(sk_tab->page);
+	sakura_tab_refresh_activity_spinners();
 	if (focus)
 		sakura_focus_tab(sk_tab);
 }
@@ -6820,6 +6821,7 @@ sakura_switch_page_cb (GtkWidget *widget, GtkWidget *widget_page,
 			sakura_set_window_title(title);
 	}
 	sakura_workspace_mark_changed(SAKURA_WORKSPACE_CHANGE_SELECTION);
+	sakura_tab_refresh_activity_spinners();
 	sakura_session_mark_dirty();
 }
 
@@ -6993,6 +6995,7 @@ sakura_sidebar_set_node_row(SakuraSidebarNode *node, GtkTreeIter *iter)
 	status_running = task_row ? task_status == SAKURA_TASK_WORKING
 	                            : (((status_tab == NULL || !status_tab->runtime_deferred) &&
                                 status == SAKURA_TAB_STATUS_RUNNING) ||
+	                              (status_tab != NULL && status_tab->command_running) ||
 	                              (status_tab != NULL &&
 	                              (status_tab->agent_start_pending ||
 	                               status_tab->codex_start_pending ||

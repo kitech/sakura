@@ -585,6 +585,62 @@ sakura_tab_run_command(SakuraTab *tab, const gchar *command, gboolean execute)
 }
 
 
+static gboolean
+sakura_tab_activity_update_cb(gpointer data)
+{
+	SakuraTab *tab = data;
+
+	tab->activity_show_source_id = 0;
+	if (tab->tab_button != NULL)
+		sakura_tab_bar_update_tab(tab);
+	return G_SOURCE_REMOVE;
+}
+
+
+/* Called from the agent event stream. Drives the shared tab-bar spinner via
+ * sakura_tab_bar_update_tab(); short commands are debounced so the bar does
+ * not flicker, and hiding is immediate. */
+void
+sakura_tab_set_command_activity(SakuraTab *tab, gboolean running,
+                                guint progress_state, guint progress_percent)
+{
+	if (tab == NULL)
+		return;
+	tab->command_running = running;
+	tab->progress_state = progress_state;
+	tab->progress_percent = progress_percent;
+	if (tab->activity_show_source_id != 0) {
+		g_source_remove(tab->activity_show_source_id);
+		tab->activity_show_source_id = 0;
+	}
+	if (running && !tab->is_active_tab) {
+		tab->activity_show_source_id = g_timeout_add(
+			300, sakura_tab_activity_update_cb, tab);
+	} else if (tab->tab_button != NULL) {
+		sakura_tab_bar_update_tab(tab);
+	}
+	sakura_sidebar_update_tab(tab);
+}
+
+
+/* Recompute which pane is active and refresh the per-tab spinners. */
+void
+sakura_tab_refresh_activity_spinners(void)
+{
+	if (sakura.workspace == NULL || sakura.workspace->panes == NULL)
+		return;
+	for (guint index = 0; index < sakura.workspace->panes->len; index++) {
+		SakuraTab *tab = g_ptr_array_index(sakura.workspace->panes, index);
+
+		if (tab == NULL)
+			continue;
+		tab->is_active_tab = tab == sakura.workspace->active_tab;
+		if (tab->tab_button != NULL)
+			sakura_tab_bar_update_tab(tab);
+	}
+}
+
+
 void
 sakura_paste_primary ()
 {
@@ -3135,6 +3191,8 @@ sakura_tab_bar_refresh(void)
 	sakura.tab_bar_refreshing = FALSE;
 	if (old_shell_visible != new_shell_visible)
 		sakura_workspace_mark_changed(SAKURA_WORKSPACE_CHANGE_GEOMETRY);
+	/* Buttons are rebuilt here, so the activity spinners must be re-applied. */
+	sakura_tab_refresh_activity_spinners();
 }
 
 guint
@@ -3229,6 +3287,58 @@ sakura_tab_button_close_cb(GtkWidget *widget, void *data)
 		sakura_close_tab(page);
 }
 
+static const gchar *sakura_tab_activity_frames[] = {
+	"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"
+};
+static guint sakura_tab_activity_index = 0;
+static guint sakura_tab_activity_source_id = 0;
+
+static const gchar *
+sakura_tab_activity_frame(void)
+{
+	return sakura_tab_activity_frames[sakura_tab_activity_index %
+	                                  G_N_ELEMENTS(sakura_tab_activity_frames)];
+}
+
+
+static gboolean
+sakura_tab_activity_pulse_cb(gpointer data)
+{
+	gboolean visible = FALSE;
+
+	(void)data;
+	sakura_tab_activity_index++;
+	if (sakura.workspace == NULL || sakura.workspace->panes == NULL) {
+		sakura_tab_activity_source_id = 0;
+		return G_SOURCE_REMOVE;
+	}
+	for (guint index = 0; index < sakura.workspace->panes->len; index++) {
+		SakuraTab *tab = g_ptr_array_index(sakura.workspace->panes, index);
+
+		if (tab == NULL || tab->tab_button_status == NULL ||
+		    !tab->command_running || tab->is_active_tab)
+			continue;
+		gtk_label_set_text(GTK_LABEL(tab->tab_button_status),
+		                   sakura_tab_activity_frame());
+		visible = TRUE;
+	}
+	if (!visible) {
+		sakura_tab_activity_source_id = 0;
+		return G_SOURCE_REMOVE;
+	}
+	return G_SOURCE_CONTINUE;
+}
+
+
+static void
+sakura_tab_activity_pulse_ensure(void)
+{
+	if (sakura_tab_activity_source_id == 0)
+		sakura_tab_activity_source_id = g_timeout_add(
+			120, sakura_tab_activity_pulse_cb, NULL);
+}
+
+
 void
 sakura_tab_bar_update_tab(SakuraTab *tab)
 {
@@ -3258,6 +3368,23 @@ sakura_tab_bar_update_tab(SakuraTab *tab)
 		gtk_widget_hide(tab->tab_button_status);
 		gtk_widget_show(tab->tab_button_spinner);
 		gtk_spinner_start(GTK_SPINNER(tab->tab_button_spinner));
+	} else if (tab->command_running && !tab->is_active_tab) {
+		/* A command keeps running in a background tab. GtkSpinner proved
+		 * unreliable inside the tab strip, so animate the existing status
+		 * label with braille frames from one shared timer. */
+		gtk_label_set_text(GTK_LABEL(tab->tab_button_status),
+		                   sakura_tab_activity_frame());
+		gtk_widget_show(status_slot);
+		gtk_widget_show(tab->tab_button_status);
+		sakura_tab_activity_pulse_ensure();
+		{
+			gchar *tooltip = tab->progress_state == 1
+			               ? g_strdup_printf(_("Command running (%u%%)"),
+			                                 tab->progress_percent)
+			               : g_strdup(_("Command running in this tab"));
+			gtk_widget_set_tooltip_text(tab->tab_button, tooltip);
+			g_free(tooltip);
+		}
 	} else if (tab->runtime_deferred) {
 		gtk_label_set_text(GTK_LABEL(tab->tab_button_status), "▶");
 		gtk_widget_show(status_slot);
@@ -3360,6 +3487,7 @@ sakura_tab_bar_add_tab(SakuraTab *tab)
 	tab->tab_button_label = label;
 	tab->tab_button_status = status;
 	tab->tab_button_spinner = spinner;
+	tab->is_active_tab = tab == sakura.workspace->active_tab;
 	gtk_style_context_add_class(gtk_widget_get_style_context(tab->tab_item),
 	                            "sakura-tab");
 	gtk_box_pack_start(GTK_BOX(tab->tab_item), button, FALSE, FALSE, 0);

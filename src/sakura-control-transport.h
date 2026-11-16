@@ -396,6 +396,9 @@ gboolean sakura_control_encode_terminal_output_event_with_offsets(
 gboolean sakura_control_encode_terminal_status_event(
 	guint64 sequence, const gchar *terminal_id, guint status,
 	const gchar *message, GByteArray *payload);
+gboolean sakura_control_encode_terminal_activity_event(
+	guint64 sequence, const gchar *terminal_id, gboolean command_running,
+	guint progress_state, guint progress_percent, GByteArray *payload);
 gboolean sakura_control_decode_response(const guint8 *payload,
 	                                      gsize payload_length,
 	                                      SakuraControlResponse *response,
@@ -415,6 +418,10 @@ gboolean sakura_control_decode_terminal_output_event_with_offsets(
 	gchar **terminal_id, guint64 *start_offset, guint64 *end_offset,
 	guint8 **data, gsize *data_length, gboolean *final_chunk,
 	GError **error);
+gboolean sakura_control_decode_terminal_activity_event(
+	const guint8 *payload, gsize payload_length, guint64 *sequence,
+	gchar **terminal_id, gboolean *command_running, guint *progress_state,
+	guint *progress_percent, GError **error);
 gboolean sakura_control_decode_terminal_status_event(
 	const guint8 *payload, gsize payload_length, guint64 *sequence,
 	gchar **terminal_id, guint *status, gchar **message, GError **error);
