@@ -5930,7 +5930,16 @@ sakura_sidebar_init (gboolean restore_session)
 	gtk_box_pack_start(GTK_BOX(toolbar), new_task, FALSE, FALSE, 0);
 
 	sidebar_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-	gtk_box_pack_start(GTK_BOX(sidebar_box), toolbar, FALSE, FALSE, 0);
+	/* The workspace toolbar lives in the window header bar: it spans the whole
+	 * window and no longer costs a row above the sidebar tree. */
+	if (sakura.header_bar != NULL) {
+		gtk_header_bar_pack_start(GTK_HEADER_BAR(sakura.header_bar), toolbar);
+		/* The header bar is shown before the sidebar is built, so children
+		 * added afterwards need an explicit show. */
+		gtk_widget_show_all(toolbar);
+	} else {
+		gtk_box_pack_start(GTK_BOX(sidebar_box), toolbar, FALSE, FALSE, 0);
+	}
 	gtk_box_pack_start(GTK_BOX(sidebar_box), scrolled, TRUE, TRUE, 0);
 	sakura.sidebar = sidebar_box;
 	g_signal_connect(sidebar_box, "map", G_CALLBACK(sakura_sidebar_map_cb), NULL);
