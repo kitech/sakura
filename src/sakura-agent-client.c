@@ -1226,6 +1226,63 @@ out:
 }
 
 
+/* Fetch the live working directory of agent-owned terminals. The shells run
+ * inside sakura-agent, so the GUI cannot read /proc for them itself. Callers
+ * use this right before persisting a session snapshot. Returns a hash table of
+ * terminal id -> cwd; terminals that could not be queried are omitted. */
+GHashTable *
+sakura_agent_fetch_terminal_cwds(const GPtrArray *terminal_ids)
+{
+	GHashTable *cwds = g_hash_table_new_full(g_str_hash, g_str_equal,
+	                                         g_free, g_free);
+	SakuraControlClientConnection *connection;
+	GError *error = NULL;
+
+	if (terminal_ids == NULL || terminal_ids->len == 0 ||
+	    sakura.agent_socket_path == NULL)
+		return cwds;
+	connection = sakura_agent_connect(sakura.agent_socket_path,
+	                                  sakura.workspace_id, &error);
+	if (connection == NULL) {
+		g_clear_error(&error);
+		return cwds;
+	}
+	for (guint index = 0; index < terminal_ids->len; index++) {
+		const gchar *terminal_id = g_ptr_array_index(terminal_ids, index);
+		GByteArray *request = g_byte_array_new();
+		GByteArray *response_payload = NULL;
+		SakuraControlResponse response = { 0 };
+		gchar *request_id = g_uuid_string_random();
+
+		if (!sakura_control_encode_get_terminal_cwd_request(
+				request_id, terminal_id, request) ||
+		    !sakura_control_client_request(connection, request,
+		                                   &response_payload, &error) ||
+		    !sakura_control_decode_response(response_payload->data,
+		                                    response_payload->len, &response,
+		                                    &error)) {
+			g_clear_error(&error);
+			g_clear_pointer(&response_payload, g_byte_array_unref);
+			g_clear_pointer(&request, g_byte_array_unref);
+			sakura_control_response_clear(&response);
+			g_free(request_id);
+			continue;
+		}
+		if (response.has_terminal_cwd && response.terminal_cwd != NULL &&
+		    response.terminal_cwd[0] != '\0')
+			g_hash_table_insert(cwds, g_strdup(terminal_id),
+			                    g_strdup(response.terminal_cwd));
+		g_clear_pointer(&response_payload, g_byte_array_unref);
+		g_clear_pointer(&request, g_byte_array_unref);
+		sakura_control_response_clear(&response);
+		g_free(request_id);
+	}
+	sakura_control_client_close(connection);
+	sakura_control_client_unref(connection);
+	return cwds;
+}
+
+
 typedef struct {
 	SakuraApp *app;
 	gchar *socket_path;

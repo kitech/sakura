@@ -221,6 +221,53 @@ sakura_session_mark_dirty(void)
 }
 
 
+static void
+sakura_session_sync_terminal_cwds(void)
+{
+	GPtrArray *ids = g_ptr_array_new_with_free_func(g_free);
+	GPtrArray *tabs = g_ptr_array_new();
+	GHashTable *cwds;
+
+	if (sakura.workspace == NULL || sakura.workspace->pages == NULL)
+		goto out;
+	for (guint page_index = 0; page_index < sakura.workspace->pages->len;
+	     page_index++) {
+		SakuraPage *page = g_ptr_array_index(sakura.workspace->pages, page_index);
+
+		if (page == NULL || page->panes == NULL)
+			continue;
+		for (guint pane_index = 0; pane_index < page->panes->len;
+		     pane_index++) {
+			SakuraTab *tab = g_ptr_array_index(page->panes, pane_index);
+
+			if (tab == NULL || tab->terminal_id == NULL ||
+			    tab->kind == SAKURA_TAB_CODEX)
+				continue;
+			g_ptr_array_add(ids, g_strdup(tab->terminal_id));
+			g_ptr_array_add(tabs, tab);
+		}
+	}
+	if (ids->len == 0)
+		goto out;
+	cwds = sakura_agent_fetch_terminal_cwds(ids);
+	for (guint index = 0; index < tabs->len; index++) {
+		SakuraTab *tab = g_ptr_array_index(tabs, index);
+		const gchar *cwd = g_hash_table_lookup(
+			cwds, g_ptr_array_index(ids, index));
+
+		if (cwd != NULL && g_strcmp0(cwd, tab->cwd) != 0) {
+			g_free(tab->cwd);
+			tab->cwd = g_strdup(cwd);
+			sakura_sidebar_update_tab(tab);
+		}
+	}
+	g_hash_table_unref(cwds);
+out:
+	g_ptr_array_unref(tabs);
+	g_ptr_array_unref(ids);
+}
+
+
 void
 sakura_session_flush(void)
 {
@@ -241,6 +288,7 @@ sakura_session_flush(void)
 		return;
 	trace_started = sakura_ui_latency_trace_begin();
 
+	sakura_session_sync_terminal_cwds();
 	snapshot = sakura_workspace_model_snapshot_new(
 		sakura.workspace, sakura.sidebar_visible,
 		sakura.sidebar_paned != NULL

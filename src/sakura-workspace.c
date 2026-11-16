@@ -5899,6 +5899,9 @@ sakura_sidebar_init (gboolean restore_session)
 	tool_item = gtk_menu_item_new_with_label(_("Open pull request..."));
 	g_signal_connect(tool_item, "activate", G_CALLBACK(sakura_open_pr_cb), NULL);
 	gtk_menu_shell_append(GTK_MENU_SHELL(tools_menu), tool_item);
+	/* Same reason as sakura_open_here_menu_new(): must not be revealed by
+	 * the sidebar's gtk_widget_show_all(). */
+	gtk_widget_set_no_show_all(tools_menu, TRUE);
 	gtk_menu_button_set_popup(GTK_MENU_BUTTON(tools_button), tools_menu);
 	gtk_box_pack_start(GTK_BOX(toolbar), tools_button, FALSE, FALSE, 0);
 	open_here_button = gtk_menu_button_new();
@@ -6050,6 +6053,11 @@ sakura_sidebar_init (gboolean restore_session)
 	gtk_box_pack_start(GTK_BOX(sakura.content_box), tab_shell, FALSE, FALSE, 0);
 	gtk_box_pack_start(GTK_BOX(sakura.content_box), sakura.notebook, TRUE, TRUE, 0);
 	gtk_box_pack_start(GTK_BOX(sakura.content_box), empty_state, TRUE, TRUE, 0);
+	/* Honor the persisted tabs_on_bottom setting at startup. The menu callback
+	 * only runs when the user toggles the item, so reordering must be applied
+	 * here as well. */
+	gtk_box_reorder_child(GTK_BOX(sakura.content_box), sakura.tab_bar_shell,
+	                      sakura.tabs_on_bottom ? 1 : 0);
 	gtk_widget_hide(empty_state);
 	gtk_notebook_set_show_tabs(GTK_NOTEBOOK(sakura.notebook), FALSE);
 
@@ -6083,7 +6091,9 @@ sakura_sidebar_init (gboolean restore_session)
 	                 G_CALLBACK(sakura_sidebar_button_press_cb), NULL);
 
 	sakura.sidebar_paned = gtk_paned_new(GTK_ORIENTATION_HORIZONTAL);
-	gtk_paned_pack1(GTK_PANED(sakura.sidebar_paned), sakura.sidebar, FALSE, FALSE);
+	/* shrink=TRUE: the sidebar may be dragged narrower than its minimum
+	 * requisition instead of snapping back to its natural size. */
+	gtk_paned_pack1(GTK_PANED(sakura.sidebar_paned), sakura.sidebar, FALSE, TRUE);
 	gtk_paned_pack2(GTK_PANED(sakura.sidebar_paned), sakura.content_box, TRUE, FALSE);
 	gtk_paned_set_position(GTK_PANED(sakura.sidebar_paned), sakura.sidebar_width);
 	g_signal_connect(sakura.sidebar_paned, "notify::position",
@@ -6337,6 +6347,37 @@ sakura_page_removed_cb (GtkWidget *widget, void *data)
 }
 
 
+/* Refresh the cached cwd of every terminal on a notebook page, including the
+ * tab-bar tab and all split panes. The session snapshot records cwd per pane,
+ * so a stale pane value would otherwise be saved and restored as "". */
+void
+sakura_workspace_refresh_page_cwds(SakuraPage *page)
+{
+	SakuraTab *tab;
+	guint index;
+	gboolean changed = FALSE;
+
+	if (page == NULL)
+		return;
+	tab = page->tab_bar_tab != NULL ? page->tab_bar_tab : page->active_tab;
+	if (tab != NULL && sakura_update_tab_cwd(tab)) {
+		sakura_sidebar_update_tab(tab);
+		changed = TRUE;
+	}
+	for (index = 0; page->panes != NULL && index < page->panes->len; index++) {
+		tab = g_ptr_array_index(page->panes, index);
+		if (tab != NULL && sakura_update_tab_cwd(tab)) {
+			sakura_sidebar_update_tab(tab);
+			changed = TRUE;
+		}
+	}
+	/* The session snapshot records cwd per pane; without this the debounced
+	 * save would not run and a pane's new cwd would never be persisted. */
+	if (changed)
+		sakura_session_mark_dirty();
+}
+
+
 gboolean
 sakura_cwd_tracking_poll_cb (gpointer data)
 {
@@ -6350,12 +6391,8 @@ sakura_cwd_tracking_poll_cb (gpointer data)
 		return G_SOURCE_CONTINUE;
 
 	pages = gtk_notebook_get_n_pages(GTK_NOTEBOOK(sakura.notebook));
-	for (page = 0; page < pages; page++) {
-		struct sakura_tab *sk_tab = sakura_tab_at_page(page);
-
-		if (sakura_update_tab_cwd(sk_tab))
-			sakura_sidebar_update_tab(sk_tab);
-	}
+	for (page = 0; page < pages; page++)
+		sakura_workspace_refresh_page_cwds(sakura_page_at_page(page));
 
 	return G_SOURCE_CONTINUE;
 }

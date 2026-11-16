@@ -155,6 +155,8 @@ sakura_control_response_clear(SakuraControlResponse *response)
 	g_clear_pointer(&response->file_root_uri, g_free);
 	g_clear_pointer(&response->file_version, g_free);
 	g_clear_pointer(&response->file_data, g_free);
+	g_clear_pointer(&response->terminal_cwd_id, g_free);
+	g_clear_pointer(&response->terminal_cwd, g_free);
 	if (response->file_entries != NULL)
 		g_ptr_array_free(response->file_entries, TRUE);
 	response->has_snapshot = FALSE;
@@ -178,6 +180,7 @@ sakura_control_response_clear(SakuraControlResponse *response)
 	response->file_data_length = 0;
 	response->file_eof = FALSE;
 	response->has_file_write = FALSE;
+	response->has_terminal_cwd = FALSE;
 	response->workspace_revision = 0;
 }
 
@@ -1409,6 +1412,13 @@ sakura_control_decode_request(const guint8 *payload,
 			request->after = decoded->move_task->after;
 		}
 		break;
+	case SAKURA__CONTROL__V1__REQUEST__BODY_GET_TERMINAL_CWD:
+		if (decoded->get_terminal_cwd != NULL) {
+			request->kind = SAKURA_CONTROL_REQUEST_GET_TERMINAL_CWD;
+			request->terminal_id = g_strdup(
+				decoded->get_terminal_cwd->terminal_id);
+		}
+		break;
 	case SAKURA__CONTROL__V1__REQUEST__BODY_LIST_FILES:
 		if (decoded->list_files != NULL) {
 			request->kind = SAKURA_CONTROL_REQUEST_LIST_FILES;
@@ -2126,6 +2136,49 @@ sakura_control_encode_file_write_response(const gchar *request_id,
 
 
 gboolean
+sakura_control_encode_get_terminal_cwd_request(const gchar *request_id,
+	                                            const gchar *terminal_id,
+	                                            GByteArray *payload)
+{
+	Sakura__Control__V1__GetTerminalCwdRequest get_cwd =
+		SAKURA__CONTROL__V1__GET_TERMINAL_CWD_REQUEST__INIT;
+	Sakura__Control__V1__Request request =
+		SAKURA__CONTROL__V1__REQUEST__INIT;
+
+	if (payload == NULL || request_id == NULL || request_id[0] == '\0' ||
+	    terminal_id == NULL || terminal_id[0] == '\0')
+		return FALSE;
+	get_cwd.terminal_id = (gchar *)terminal_id;
+	request.request_id = (gchar *)request_id;
+	request.body_case = SAKURA__CONTROL__V1__REQUEST__BODY_GET_TERMINAL_CWD;
+	request.get_terminal_cwd = &get_cwd;
+	return sakura_control_pack_message(&request.base, payload);
+}
+
+
+gboolean
+sakura_control_encode_terminal_cwd_response(const gchar *request_id,
+	                                        const gchar *terminal_id,
+	                                        const gchar *cwd,
+	                                        GByteArray *payload)
+{
+	Sakura__Control__V1__TerminalCwdResponse terminal_cwd =
+		SAKURA__CONTROL__V1__TERMINAL_CWD_RESPONSE__INIT;
+	Sakura__Control__V1__Response response =
+		SAKURA__CONTROL__V1__RESPONSE__INIT;
+
+	if (request_id == NULL || request_id[0] == '\0' || payload == NULL)
+		return FALSE;
+	terminal_cwd.terminal_id = (gchar *)sakura_control_string(terminal_id);
+	terminal_cwd.cwd = (gchar *)sakura_control_string(cwd);
+	response.request_id = (gchar *)request_id;
+	response.body_case = SAKURA__CONTROL__V1__RESPONSE__BODY_TERMINAL_CWD;
+	response.terminal_cwd = &terminal_cwd;
+	return sakura_control_pack_message(&response.base, payload);
+}
+
+
+gboolean
 sakura_control_encode_terminal_attachment_response(
 	const gchar *request_id, const SakuraCoreTerminal *terminal,
 	const guint8 *replay_data, gsize replay_data_length, GByteArray *payload)
@@ -2279,6 +2332,7 @@ sakura_control_decode_response(const guint8 *payload,
 	gboolean has_file_list;
 	gboolean has_file_read;
 	gboolean has_file_write;
+	gboolean has_terminal_cwd;
 
 	if (payload == NULL || response == NULL)
 		return sakura_control_error(error, "invalid control response");
@@ -2326,6 +2380,10 @@ sakura_control_decode_response(const guint8 *payload,
 	has_file_write =
 		decoded->body_case == SAKURA__CONTROL__V1__RESPONSE__BODY_FILE_WRITE &&
 		decoded->file_write != NULL;
+	has_terminal_cwd =
+		decoded->body_case ==
+			SAKURA__CONTROL__V1__RESPONSE__BODY_TERMINAL_CWD &&
+		decoded->terminal_cwd != NULL;
 	if (accepted) {
 		response->accepted_kind = g_strdup(decoded->accepted->kind);
 		response->accepted_id = g_strdup(decoded->accepted->id);
@@ -2394,6 +2452,12 @@ sakura_control_decode_response(const guint8 *payload,
 		response->has_file_write = TRUE;
 		response->file_version = g_strdup(decoded->file_write->version);
 	}
+	if (has_terminal_cwd) {
+		response->has_terminal_cwd = TRUE;
+		response->terminal_cwd_id =
+			g_strdup(decoded->terminal_cwd->terminal_id);
+		response->terminal_cwd = g_strdup(decoded->terminal_cwd->cwd);
+	}
 	sakura__control__v1__response__free_unpacked(decoded, NULL);
 	response->has_snapshot = has_snapshot;
 	response->accepted = accepted;
@@ -2405,7 +2469,7 @@ sakura_control_decode_response(const guint8 *payload,
 	if (response->request_id == NULL ||
 	    (!response->has_snapshot && !response->accepted && !response->hello &&
 	     !response->attached && !has_file_list && !has_file_read &&
-	     !has_file_write))
+	     !has_file_write && !has_terminal_cwd))
 		return sakura_control_error(error, "unsupported control response");
 	return TRUE;
 }

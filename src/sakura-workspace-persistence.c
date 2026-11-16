@@ -275,6 +275,11 @@ sakura_workspace_model_snapshot_new(const SakuraWorkspaceModel *model,
 		return NULL;
 	snapshot = sakura_session_snapshot_new();
 	model_panes = sakura_workspace_snapshot_ordered_panes(model);
+	/* Refresh cached cwd values before recording them: the 500 ms poll only
+	 * updates pane cwd asynchronously, and a pane whose cwd changed just
+	 * before the save would otherwise persist a stale value. */
+	for (guint index = 0; index < model_panes->len; index++)
+		sakura_update_tab_cwd(g_ptr_array_index(model_panes, index));
 	selected_tab = model->active_tab != NULL ? model->active_tab
 	                                           : model->active_page != NULL
 	                                           ? model->active_page->active_tab : NULL;

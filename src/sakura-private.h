@@ -831,6 +831,7 @@ gboolean sakura_workspace_restore_snapshot_async(
 void sakura_workspace_restore_snapshot_async_cancel(void);
 void sakura_workspace_finish_restore(void);
 gboolean sakura_workspace_validate(GError **error);
+void sakura_workspace_refresh_page_cwds(SakuraPage *page);
 gboolean sakura_cwd_tracking_poll_cb(gpointer data);
 void sakura_set_name_dialog_cb(GtkWidget *widget, void *data);
 void sakura_setname_entry_changed_cb(GtkWidget *widget, void *data);
@@ -1048,6 +1049,7 @@ void sakura_startup_terminal_start_pending(SakuraApp *app, gboolean pending);
  * uses this facade and does not depend on socket framing or protobuf-c. */
 gboolean sakura_agent_start(SakuraApp *app);
 void sakura_agent_apply_pending_snapshot(SakuraApp *app);
+GHashTable *sakura_agent_fetch_terminal_cwds(const GPtrArray *terminal_ids);
 struct sakura_agent_terminal_start_result {
 	SakuraApp *app;
 	gchar *requested_terminal_id;

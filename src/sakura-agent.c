@@ -2034,7 +2034,14 @@ sakura_agent_restart_terminal(SakuraAgent *agent,
 		                         ? logical_terminal->group->id : "root";
 		restart_request.task_id = logical_terminal->task != NULL
 		                        ? logical_terminal->task->id : "root";
-		if (logical_terminal->cwd != NULL && logical_terminal->cwd[0] != '\0') {
+		if ((request->cwd == NULL || request->cwd[0] == '\0') &&
+		    logical_terminal->cwd != NULL &&
+		    logical_terminal->cwd[0] != '\0') {
+			/* The workspace file is only a fallback: a caller restoring a
+			 * desktop session passes the cwd recorded in the session file, and
+			 * the workspace copy can be stale because both use the same
+			 * terminal ids. Never let the stale copy override the explicit
+			 * request. */
 			restart_cwd = g_strdup(logical_terminal->cwd);
 			restart_request.cwd = restart_cwd;
 		}
@@ -2634,6 +2641,43 @@ out:
 
 
 static gboolean
+sakura_agent_handle_terminal_cwd_request(
+	SakuraAgent *agent, const SakuraControlRequest *request,
+	const gchar *request_id, GByteArray *response, GError **error)
+{
+	SakuraAgentTerminal *terminal = NULL;
+	char path[64], buf[PATH_MAX];
+	ssize_t length;
+
+	for (guint index = 0; index < agent->terminals->len; index++) {
+		SakuraAgentTerminal *candidate =
+			g_ptr_array_index(agent->terminals, index);
+
+		if (candidate != NULL &&
+		    g_strcmp0(candidate->id, request->terminal_id) == 0) {
+			terminal = candidate;
+			break;
+		}
+	}
+	if (terminal == NULL || terminal->pid <= 0)
+		return sakura_agent_error(error, "terminal not found");
+	g_snprintf(path, sizeof(path), "/proc/%d/cwd", (int)terminal->pid);
+	length = readlink(path, buf, sizeof(buf) - 1);
+	if (length <= 0 || (gsize)length >= sizeof(buf) || buf[0] != '/')
+		return sakura_agent_error(error, "could not read terminal cwd");
+	buf[length] = '\0';
+	/* Keep the authoritative workspace record in sync with the live shell so
+	 * snapshots handed to other clients also carry the current directory. */
+	if (g_strcmp0(terminal->core->cwd, buf) != 0) {
+		g_free(terminal->core->cwd);
+		terminal->core->cwd = g_strdup(buf);
+	}
+	return sakura_control_encode_terminal_cwd_response(
+		request_id, request->terminal_id, buf, response);
+}
+
+
+static gboolean
 sakura_agent_handle_filesystem_request(
 	SakuraAgent *agent, const SakuraControlRequest *request,
 	const gchar *request_id, GByteArray *response, GError **error)
@@ -3046,6 +3090,9 @@ sakura_agent_connection_thread(gpointer data)
 		           decoded.kind == SAKURA_CONTROL_REQUEST_READ_FILE ||
 		           decoded.kind == SAKURA_CONTROL_REQUEST_WRITE_FILE) {
 			sakura_agent_handle_filesystem_request(
+				request->agent, &decoded, request_id, response, &error);
+		} else if (decoded.kind == SAKURA_CONTROL_REQUEST_GET_TERMINAL_CWD) {
+			sakura_agent_handle_terminal_cwd_request(
 				request->agent, &decoded, request_id, response, &error);
 		} else if (decoded.kind == SAKURA_CONTROL_REQUEST_ATTACH_TERMINAL) {
 			gboolean workspace_changed = FALSE;

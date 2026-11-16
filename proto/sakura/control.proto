@@ -368,6 +368,7 @@ message Request {
     SetJobEnabledRequest set_job_enabled = 35;
     DeleteJobRequest delete_job = 36;
     RunJobRequest run_job = 37;
+    GetTerminalCwdRequest get_terminal_cwd = 38;
   }
   uint64 expected_revision = 23;
   bool has_expected_revision = 24;
@@ -384,6 +385,7 @@ message Response {
     FileListResponse file_list = 8;
     FileReadResponse file_read = 9;
     FileWriteResponse file_write = 10;
+    TerminalCwdResponse terminal_cwd = 11;
   }
   uint64 workspace_revision = 7;
 }
@@ -419,6 +421,15 @@ message FileReadResponse {
 
 message FileWriteResponse {
   string version = 1;
+}
+
+message GetTerminalCwdRequest {
+  string terminal_id = 1;
+}
+
+message TerminalCwdResponse {
+  string terminal_id = 1;
+  string cwd = 2;
 }
 
 message WorkspaceChanged {

@@ -40,7 +40,8 @@ typedef enum {
 	SAKURA_CONTROL_REQUEST_UPSERT_JOB,
 	SAKURA_CONTROL_REQUEST_SET_JOB_ENABLED,
 	SAKURA_CONTROL_REQUEST_DELETE_JOB,
-	SAKURA_CONTROL_REQUEST_RUN_JOB
+	SAKURA_CONTROL_REQUEST_RUN_JOB,
+	SAKURA_CONTROL_REQUEST_GET_TERMINAL_CWD
 } SakuraControlRequestKind;
 
 typedef struct {
@@ -143,6 +144,9 @@ typedef struct {
 	gsize file_data_length;
 	gboolean file_eof;
 	gboolean has_file_write;
+	gboolean has_terminal_cwd;
+	gchar *terminal_cwd_id;
+	gchar *terminal_cwd;
 	guint64 workspace_revision;
 } SakuraControlResponse;
 
@@ -358,6 +362,11 @@ gboolean sakura_control_encode_file_read_response(
 	const gchar *version, gboolean eof, GByteArray *payload);
 gboolean sakura_control_encode_file_write_response(
 	const gchar *request_id, const gchar *version, GByteArray *payload);
+gboolean sakura_control_encode_get_terminal_cwd_request(
+	const gchar *request_id, const gchar *terminal_id, GByteArray *payload);
+gboolean sakura_control_encode_terminal_cwd_response(
+	const gchar *request_id, const gchar *terminal_id, const gchar *cwd,
+	GByteArray *payload);
 gboolean sakura_control_encode_terminal_attachment_response(
 	const gchar *request_id, const SakuraCoreTerminal *terminal,
 	const guint8 *replay_data, gsize replay_data_length, GByteArray *payload);
