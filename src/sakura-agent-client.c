@@ -766,6 +766,7 @@ sakura_agent_apply_workspace_snapshot(SakuraApp *app,
 		sakura_workspace_end_mutation();
 	}
 	app->agent_snapshot_reconciling = FALSE;
+	sakura_sidebar_bookmarks_refresh();
 	/* The desktop file stores presentation joins by stable ID. Refresh it after
 	 * agent changes without copying the authoritative hierarchy back into it. */
 	sakura_session_mark_dirty();
@@ -1280,6 +1281,72 @@ sakura_agent_fetch_terminal_cwds(const GPtrArray *terminal_ids)
 	sakura_control_client_close(connection);
 	sakura_control_client_unref(connection);
 	return cwds;
+}
+
+
+/* Send a bookmark mutation to the authoritative workspace agent. Both calls
+ * open a short-lived connection: bookmark edits are user-paced, so reusing the
+ * event socket would add locking without any benefit. */
+static gboolean
+sakura_agent_send_bookmark_request(GByteArray *request, GError **error)
+{
+	SakuraControlClientConnection *connection;
+	GByteArray *response_payload = NULL;
+	SakuraControlResponse response = { 0 };
+	gboolean success = FALSE;
+
+	if (sakura.agent_socket_path == NULL || request == NULL) {
+		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT,
+		                    "bookmark changes require a running workspace agent");
+		return FALSE;
+	}
+	connection = sakura_agent_connect(sakura.agent_socket_path,
+	                                  sakura.workspace_id, error);
+	if (connection == NULL)
+		return FALSE;
+	success = sakura_control_client_request(connection, request,
+	                                        &response_payload, error) &&
+	          sakura_control_decode_response(response_payload->data,
+	                                         response_payload->len,
+	                                         &response, error);
+	g_clear_pointer(&response_payload, g_byte_array_unref);
+	sakura_control_response_clear(&response);
+	sakura_control_client_close(connection);
+	sakura_control_client_unref(connection);
+	return success;
+}
+
+
+gboolean
+sakura_agent_upsert_bookmark(const SakuraSessionBookmarkRecord *bookmark,
+	                         GError **error)
+{
+	GByteArray *request = g_byte_array_new();
+	gchar *request_id = g_uuid_string_random();
+	gboolean success;
+
+	success = sakura_control_encode_upsert_bookmark_request(
+			request_id, bookmark, request) &&
+	          sakura_agent_send_bookmark_request(request, error);
+	g_clear_pointer(&request, g_byte_array_unref);
+	g_free(request_id);
+	return success;
+}
+
+
+gboolean
+sakura_agent_delete_bookmark(const gchar *bookmark_id, GError **error)
+{
+	GByteArray *request = g_byte_array_new();
+	gchar *request_id = g_uuid_string_random();
+	gboolean success;
+
+	success = sakura_control_encode_delete_bookmark_request(
+			request_id, bookmark_id, request) &&
+	          sakura_agent_send_bookmark_request(request, error);
+	g_clear_pointer(&request, g_byte_array_unref);
+	g_free(request_id);
+	return success;
 }
 
 

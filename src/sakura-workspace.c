@@ -5771,11 +5771,244 @@ sakura_sidebar_row_expansion_changed_cb(GtkTreeView *tree,
 }
 
 
+
+/* ------------------------------------------------------------------ */
+/* Command bookmarks                                                  */
+/* ------------------------------------------------------------------ */
+
+struct sakura_bookmark_dialog_state {
+	gchar *id;
+	GtkWidget *dialog;
+	GtkWidget *name_entry;
+	GtkWidget *command_entry;
+};
+
+/* In GTK3 a menu attached to a GtkMenuButton is not part of the widget tree,
+ * so its items must be shown with gtk_widget_show_all() or the popup is empty
+ * and its grab freezes the UI. */
+static void
+sakura_bookmark_dialog_response_cb(GtkDialog *dialog, gint response_id,
+                                   gpointer data)
+{
+	struct sakura_bookmark_dialog_state *state = data;
+
+	if (response_id == GTK_RESPONSE_ACCEPT) {
+		const gchar *name = gtk_entry_get_text(GTK_ENTRY(state->name_entry));
+		const gchar *command =
+			gtk_entry_get_text(GTK_ENTRY(state->command_entry));
+		SakuraSessionBookmarkRecord bookmark = { 0 };
+		gchar *generated_id = NULL;
+		GError *error = NULL;
+
+		if (name[0] == '\0' || command[0] == '\0') {
+			sakura_error(_("A command bookmark needs a name and a command."));
+		} else {
+			if (state->id != NULL) {
+				bookmark.id = state->id;
+			} else {
+				gchar *uuid = g_uuid_string_random();
+				generated_id = g_strdup_printf("bookmark-%s", uuid);
+				bookmark.id = generated_id;
+				g_free(uuid);
+			}
+			bookmark.name = (gchar *)name;
+			bookmark.command = (gchar *)command;
+			bookmark.order = sakura.workspace->bookmarks != NULL
+			               ? sakura.workspace->bookmarks->len : 0;
+			if (!sakura_agent_upsert_bookmark(&bookmark, &error)) {
+				sakura_error(_("Could not save the bookmark: %s"),
+				             error != NULL ? error->message
+				                           : _("unknown error"));
+				g_clear_error(&error);
+			} else {
+				sakura_sidebar_bookmarks_refresh();
+			}
+			g_free(generated_id);
+		}
+	}
+	gtk_widget_destroy(GTK_WIDGET(dialog));
+	g_free(state->id);
+	g_free(state);
+}
+
+
+static void
+sakura_bookmark_edit_cb(GtkMenuItem *item, gpointer data)
+{
+	SakuraSessionBookmarkRecord *bookmark = data;
+	struct sakura_bookmark_dialog_state *state =
+		g_new0(struct sakura_bookmark_dialog_state, 1);
+	GtkWidget *content, *box, *label;
+
+	(void)item;
+	state->id = g_strdup(bookmark != NULL ? bookmark->id : NULL);
+	state->dialog = gtk_dialog_new_with_buttons(
+		bookmark != NULL ? _("Edit command bookmark")
+		                 : _("Add command bookmark"),
+		GTK_WINDOW(sakura.main_window),
+		GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+		_("_Cancel"), GTK_RESPONSE_REJECT,
+		_("_Save"), GTK_RESPONSE_ACCEPT, NULL);
+	content = gtk_dialog_get_content_area(GTK_DIALOG(state->dialog));
+	box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+	gtk_container_set_border_width(GTK_CONTAINER(box), 8);
+	gtk_container_add(GTK_CONTAINER(content), box);
+
+	label = gtk_label_new(_("Name"));
+	gtk_label_set_xalign(GTK_LABEL(label), 0.0);
+	gtk_box_pack_start(GTK_BOX(box), label, FALSE, FALSE, 0);
+	state->name_entry = gtk_entry_new();
+	gtk_entry_set_text(GTK_ENTRY(state->name_entry),
+	                   bookmark != NULL && bookmark->name != NULL
+	                   ? bookmark->name : "");
+	gtk_box_pack_start(GTK_BOX(box), state->name_entry, FALSE, FALSE, 0);
+
+	label = gtk_label_new(_("Command"));
+	gtk_label_set_xalign(GTK_LABEL(label), 0.0);
+	gtk_box_pack_start(GTK_BOX(box), label, FALSE, FALSE, 0);
+	state->command_entry = gtk_entry_new();
+	gtk_entry_set_text(GTK_ENTRY(state->command_entry),
+	                   bookmark != NULL && bookmark->command != NULL
+	                   ? bookmark->command : "");
+	gtk_box_pack_start(GTK_BOX(box), state->command_entry, FALSE, FALSE, 0);
+
+	g_signal_connect(state->dialog, "response",
+	                 G_CALLBACK(sakura_bookmark_dialog_response_cb), state);
+	gtk_widget_show_all(state->dialog);
+}
+
+
+static void
+sakura_bookmark_run_cb(GtkMenuItem *item, gpointer data)
+{
+	SakuraSessionBookmarkRecord *bookmark = data;
+	gboolean execute = GPOINTER_TO_INT(
+		g_object_get_data(G_OBJECT(item), "sakura-bookmark-execute")) != 0;
+
+	(void)item;
+	if (sakura.workspace != NULL && sakura.workspace->active_tab != NULL)
+		sakura_tab_run_command(sakura.workspace->active_tab,
+		                       bookmark->command, execute);
+}
+
+
+static void
+sakura_bookmark_delete_cb(GtkMenuItem *item, gpointer data)
+{
+	SakuraSessionBookmarkRecord *bookmark = data;
+	GError *error = NULL;
+
+	(void)item;
+	if (!sakura_agent_delete_bookmark(bookmark->id, &error)) {
+		sakura_error(_("Could not delete the bookmark: %s"),
+		             error != NULL ? error->message : _("unknown error"));
+		g_clear_error(&error);
+		return;
+	}
+	sakura_sidebar_bookmarks_refresh();
+}
+
+
+static GtkWidget *
+sakura_bookmarks_menu_item_new(const gchar *label, GCallback callback,
+                               gpointer data, gboolean execute)
+{
+	GtkWidget *item = gtk_menu_item_new_with_label(label);
+
+	g_object_set_data(G_OBJECT(item), "sakura-bookmark-execute",
+	                  GINT_TO_POINTER(execute ? 1 : 0));
+	g_signal_connect(item, "activate", callback, data);
+	return item;
+}
+
+
+void
+sakura_sidebar_bookmarks_refresh(void)
+{
+	GtkWidget *menu = sakura.bookmarks_menu;
+	GList *children;
+	gboolean empty = TRUE;
+
+	if (menu == NULL || sakura.workspace == NULL)
+		return;
+	/* Rebuilding the menu while it is open would leave a dangling grab. The
+	 * deactivate handler refreshes it again after the popup closes. */
+	if (gtk_widget_get_visible(menu))
+		return;
+	children = gtk_container_get_children(GTK_CONTAINER(menu));
+	for (GList *link = children; link != NULL; link = link->next) {
+		GtkWidget *child = GTK_WIDGET(link->data);
+
+		/* Submenus are attached to their item, not owned as children. */
+		if (GTK_IS_MENU_ITEM(child)) {
+			GtkWidget *submenu = gtk_menu_item_get_submenu(GTK_MENU_ITEM(child));
+
+			if (submenu != NULL)
+				gtk_widget_destroy(submenu);
+		}
+		gtk_widget_destroy(child);
+	}
+	g_list_free(children);
+
+	for (guint index = 0; sakura.workspace->bookmarks != NULL &&
+	                     index < sakura.workspace->bookmarks->len; index++) {
+		SakuraSessionBookmarkRecord *bookmark = g_ptr_array_index(
+			sakura.workspace->bookmarks, index);
+		GtkWidget *item, *submenu;
+
+		if (bookmark == NULL || bookmark->command == NULL ||
+		    bookmark->command[0] == '\0')
+			continue;
+		empty = FALSE;
+		item = gtk_menu_item_new_with_label(
+			bookmark->name != NULL ? bookmark->name : bookmark->command);
+		submenu = gtk_menu_new();
+		gtk_menu_shell_append(GTK_MENU_SHELL(submenu),
+		                      sakura_bookmarks_menu_item_new(
+			                      _("Run"), G_CALLBACK(sakura_bookmark_run_cb),
+			                      bookmark, TRUE));
+		gtk_menu_shell_append(GTK_MENU_SHELL(submenu),
+		                      sakura_bookmarks_menu_item_new(
+			                      _("Paste only"),
+			                      G_CALLBACK(sakura_bookmark_run_cb),
+			                      bookmark, FALSE));
+		gtk_menu_shell_append(GTK_MENU_SHELL(submenu),
+		                      gtk_separator_menu_item_new());
+		gtk_menu_shell_append(GTK_MENU_SHELL(submenu),
+		                      sakura_bookmarks_menu_item_new(
+			                      _("Edit…"),
+			                      G_CALLBACK(sakura_bookmark_edit_cb),
+			                      bookmark, TRUE));
+		gtk_menu_shell_append(GTK_MENU_SHELL(submenu),
+		                      sakura_bookmarks_menu_item_new(
+			                      _("Delete"),
+			                      G_CALLBACK(sakura_bookmark_delete_cb),
+			                      bookmark, TRUE));
+		gtk_widget_show_all(submenu);
+		gtk_menu_item_set_submenu(GTK_MENU_ITEM(item), submenu);
+		gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+	}
+	if (empty) {
+		GtkWidget *item = gtk_menu_item_new_with_label(
+			_("No command bookmarks"));
+		gtk_widget_set_sensitive(item, FALSE);
+		gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
+	}
+	gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
+	gtk_menu_shell_append(GTK_MENU_SHELL(menu),
+	                      sakura_bookmarks_menu_item_new(
+		                      _("Add command…"),
+		                      G_CALLBACK(sakura_bookmark_edit_cb), NULL, TRUE));
+	gtk_widget_show_all(menu);
+}
+
+
 void
 sakura_sidebar_init (gboolean restore_session)
 {
-	GtkWidget *sidebar_box, *toolbar, *title, *tools_button, *open_here_button,
-	          *collapse_all, *new_terminal, *new_group, *new_task;
+	GtkWidget *sidebar_box, *toolbar, *title, *tools_button, *bookmarks_button,
+	          *open_here_button, *collapse_all, *new_terminal, *new_group,
+	          *new_task;
 	GtkWidget *tools_menu, *tool_item;
 	GtkWidget *tab_shell, *scope_label, *tab_scrolled, *tab_bar, *tab_new;
 	GtkWidget *empty_state, *empty_label, *empty_new;
@@ -5905,6 +6138,18 @@ sakura_sidebar_init (gboolean restore_session)
 	gtk_widget_show_all(tools_menu);
 	gtk_menu_button_set_popup(GTK_MENU_BUTTON(tools_button), tools_menu);
 	gtk_box_pack_start(GTK_BOX(toolbar), tools_button, FALSE, FALSE, 0);
+	bookmarks_button = gtk_menu_button_new();
+	gtk_button_set_image(GTK_BUTTON(bookmarks_button),
+	                     gtk_image_new_from_icon_name("user-bookmarks-symbolic",
+	                                                  GTK_ICON_SIZE_MENU));
+	gtk_button_set_relief(GTK_BUTTON(bookmarks_button), GTK_RELIEF_NONE);
+	gtk_widget_set_tooltip_text(bookmarks_button, _("Command bookmarks"));
+	sakura.bookmarks_menu = gtk_menu_new();
+	g_signal_connect_swapped(sakura.bookmarks_menu, "deactivate",
+	                         G_CALLBACK(sakura_sidebar_bookmarks_refresh), NULL);
+	gtk_menu_button_set_popup(GTK_MENU_BUTTON(bookmarks_button),
+	                          sakura.bookmarks_menu);
+	gtk_box_pack_start(GTK_BOX(toolbar), bookmarks_button, FALSE, FALSE, 0);
 	open_here_button = gtk_menu_button_new();
 	gtk_button_set_image(GTK_BUTTON(open_here_button),
 	                     gtk_image_new_from_icon_name("folder-open", GTK_ICON_SIZE_MENU));
@@ -6109,6 +6354,7 @@ sakura_sidebar_init (gboolean restore_session)
 	g_signal_connect(sakura.sidebar_paned, "notify::position",
 	                 G_CALLBACK(sakura_sidebar_paned_position_cb), NULL);
 	gtk_widget_show_all(sakura.sidebar_paned);
+	sakura_sidebar_bookmarks_refresh();
 	if (!sakura.sidebar_visible)
 		gtk_widget_hide(sakura.sidebar);
 	sakura_tab_bar_refresh();

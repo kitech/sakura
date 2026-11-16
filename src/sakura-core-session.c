@@ -514,7 +514,8 @@ sakura_session_snapshot_load_into(GKeyFile *key_file,
                                    GError **error)
 {
 	gint version, group_count, task_count = 0, terminal_count, page_count = 0,
-	     layout_count = 0, expanded_sidebar_count = 0, job_count = 0;
+	     layout_count = 0, expanded_sidebar_count = 0, job_count = 0,
+	     bookmark_count = 0;
 	gint index;
 
 	if (key_file == NULL || snapshot == NULL)
@@ -584,6 +585,14 @@ sakura_session_snapshot_load_into(GKeyFile *key_file,
 		if (job_count < 0)
 			return sakura_session_error(error, G_KEY_FILE_ERROR_INVALID_VALUE,
 			                            g_strdup("job count cannot be negative"));
+	}
+	if (version >= 13) {
+		bookmark_count = g_key_file_get_integer(key_file, "Session",
+		                                        "bookmark_count", NULL);
+		/* Optional: sessions written before command bookmarks existed simply
+		 * have no bookmarks. */
+		if (bookmark_count < 0)
+			bookmark_count = 0;
 	}
 
 	if (g_key_file_has_key(key_file, "Session", "selected_terminal", NULL))
@@ -868,6 +877,27 @@ sakura_session_snapshot_load_into(GKeyFile *key_file,
 		}
 		g_ptr_array_add(snapshot->jobs, job);
 	}
+	for (index = 0; index < bookmark_count; index++) {
+		g_autofree gchar *section = g_strdup_printf("Bookmark%d", index);
+		g_autofree gchar *id = g_key_file_get_string(key_file, section, "id", NULL);
+		g_autofree gchar *name = g_key_file_get_string(key_file, section, "name", NULL);
+		g_autofree gchar *command = g_key_file_get_string(
+			key_file, section, "command", NULL);
+		SakuraSessionBookmarkRecord *bookmark;
+
+		/* A bookmark without a command is useless; skip it instead of failing
+		 * the whole workspace restore. */
+		if (id == NULL || id[0] == '\0' || command == NULL ||
+		    command[0] == '\0')
+			continue;
+		bookmark = g_new0(SakuraSessionBookmarkRecord, 1);
+		bookmark->id = g_strdup(id);
+		bookmark->name = g_strdup(name != NULL && name[0] != '\0'
+		                        ? name : id);
+		bookmark->command = g_strdup(command);
+		bookmark->order = g_key_file_get_integer(key_file, section, "order", NULL);
+		g_ptr_array_add(snapshot->bookmarks, bookmark);
+	}
 	sakura_session_repair_duplicate_page_ids(snapshot);
 
 	{
@@ -929,6 +959,8 @@ sakura_session_snapshot_save(const SakuraSessionSnapshot *snapshot,
 	g_key_file_set_integer(key_file, "Session", "layout_count", snapshot->layouts->len);
 	g_key_file_set_integer(key_file, "Session", "terminal_count", snapshot->tabs->len);
 	g_key_file_set_integer(key_file, "Session", "job_count", snapshot->jobs->len);
+	g_key_file_set_integer(key_file, "Session", "bookmark_count",
+	                      snapshot->bookmarks->len);
 	g_key_file_set_integer(key_file, "Session", "selected_terminal",
 	                      snapshot->selected_terminal);
 	if (snapshot->selected_terminal_id != NULL)
@@ -1115,5 +1147,16 @@ sakura_session_snapshot_save(const SakuraSessionSnapshot *snapshot,
 		                      job->last_status != NULL ? job->last_status : "never");
 		if (job->last_error != NULL && job->last_error[0] != '\0')
 			g_key_file_set_string(key_file, section, "last_error", job->last_error);
+	}
+	for (index = 0; index < snapshot->bookmarks->len; index++) {
+		SakuraSessionBookmarkRecord *bookmark =
+			g_ptr_array_index(snapshot->bookmarks, index);
+		g_autofree gchar *section = g_strdup_printf("Bookmark%u", index);
+
+		g_key_file_set_string(key_file, section, "id", bookmark->id);
+		g_key_file_set_string(key_file, section, "name", bookmark->name);
+		g_key_file_set_string(key_file, section, "command", bookmark->command);
+		g_key_file_set_integer(key_file, section, "order",
+		                      (gint)bookmark->order);
 	}
 }

@@ -131,6 +131,34 @@ sakura_session_job_record_copy(const SakuraSessionJobRecord *record)
 }
 
 
+void
+sakura_session_bookmark_record_free(SakuraSessionBookmarkRecord *record)
+{
+	if (record == NULL)
+		return;
+	g_free(record->id);
+	g_free(record->name);
+	g_free(record->command);
+	g_free(record);
+}
+
+
+SakuraSessionBookmarkRecord *
+sakura_session_bookmark_record_copy(const SakuraSessionBookmarkRecord *record)
+{
+	SakuraSessionBookmarkRecord *copy;
+
+	if (record == NULL)
+		return NULL;
+	copy = g_new0(SakuraSessionBookmarkRecord, 1);
+	copy->id = g_strdup(record->id);
+	copy->name = g_strdup(record->name);
+	copy->command = g_strdup(record->command);
+	copy->order = record->order;
+	return copy;
+}
+
+
 static void
 sakura_session_sidebar_expansion_record_free(gpointer data)
 {
@@ -157,6 +185,8 @@ sakura_session_snapshot_new(void)
 		sakura_session_sidebar_expansion_record_free);
 	snapshot->jobs = g_ptr_array_new_with_free_func(
 		(GDestroyNotify)sakura_session_job_record_free);
+	snapshot->bookmarks = g_ptr_array_new_with_free_func(
+		(GDestroyNotify)sakura_session_bookmark_record_free);
 	snapshot->workspace_id = g_uuid_string_random();
 	snapshot->selected_terminal = -1;
 	snapshot->active_group_id = g_strdup("root");
@@ -180,6 +210,7 @@ sakura_session_snapshot_free(SakuraSessionSnapshot *snapshot)
 	g_clear_pointer(&snapshot->layouts, g_ptr_array_unref);
 	g_clear_pointer(&snapshot->expanded_sidebar_nodes, g_ptr_array_unref);
 	g_clear_pointer(&snapshot->jobs, g_ptr_array_unref);
+	g_clear_pointer(&snapshot->bookmarks, g_ptr_array_unref);
 	g_free(snapshot->workspace_id);
 	g_free(snapshot->selected_terminal_id);
 	g_free(snapshot->selected_page_id);

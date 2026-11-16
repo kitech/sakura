@@ -41,6 +41,8 @@ typedef enum {
 	SAKURA_CONTROL_REQUEST_SET_JOB_ENABLED,
 	SAKURA_CONTROL_REQUEST_DELETE_JOB,
 	SAKURA_CONTROL_REQUEST_RUN_JOB,
+	SAKURA_CONTROL_REQUEST_UPSERT_BOOKMARK,
+	SAKURA_CONTROL_REQUEST_DELETE_BOOKMARK,
 	SAKURA_CONTROL_REQUEST_GET_TERMINAL_CWD
 } SakuraControlRequestKind;
 
@@ -249,6 +251,11 @@ gboolean sakura_control_encode_delete_job_request(
 	const gchar *request_id, const gchar *name, GByteArray *payload);
 gboolean sakura_control_encode_run_job_request(
 	const gchar *request_id, const gchar *name, GByteArray *payload);
+gboolean sakura_control_encode_upsert_bookmark_request(
+	const gchar *request_id, const SakuraSessionBookmarkRecord *bookmark,
+	GByteArray *payload);
+gboolean sakura_control_encode_delete_bookmark_request(
+	const gchar *request_id, const gchar *bookmark_id, GByteArray *payload);
 gboolean sakura_control_encode_create_terminal_request(
 	const gchar *request_id, const gchar *terminal_id, const gchar *group_id,
 	const gchar *task_id, const gchar *cwd, guint cols, guint rows,

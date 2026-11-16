@@ -11,6 +11,8 @@ sakura_workspace_model_new(void)
 	model->panes = g_ptr_array_new();
 	model->tasks = g_ptr_array_new_with_free_func(
 		(GDestroyNotify)sakura_task_free);
+	model->bookmarks = g_ptr_array_new_with_free_func(
+		(GDestroyNotify)sakura_session_bookmark_record_free);
 	return model;
 }
 
@@ -32,6 +34,7 @@ sakura_workspace_model_free(SakuraWorkspaceModel *model)
 	g_clear_pointer(&model->pages, g_ptr_array_unref);
 	g_clear_pointer(&model->panes, g_ptr_array_unref);
 	g_clear_pointer(&model->tasks, g_ptr_array_unref);
+	g_clear_pointer(&model->bookmarks, g_ptr_array_unref);
 	g_list_free_full(model->groups, (GDestroyNotify)sakura_group_free);
 	g_free(model);
 }
@@ -652,6 +655,20 @@ sakura_workspace_model_apply_snapshot(SakuraWorkspaceModel *model,
 			}
 			if (!present)
 				sakura_workspace_model_remove_task(model, task);
+		}
+	}
+	/* Bookmarks are agent-owned: replace the projection so the header menu
+	 * always matches the authoritative workspace. */
+	if (model->bookmarks != NULL && snapshot->bookmarks != NULL) {
+		g_ptr_array_set_size(model->bookmarks, 0);
+		for (guint index = 0; index < snapshot->bookmarks->len; index++) {
+			SakuraSessionBookmarkRecord *record = g_ptr_array_index(
+				snapshot->bookmarks, index);
+
+			if (record != NULL && record->command != NULL &&
+			    record->command[0] != '\0')
+				g_ptr_array_add(model->bookmarks,
+				                sakura_session_bookmark_record_copy(record));
 		}
 	}
 	return TRUE;

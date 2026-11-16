@@ -152,6 +152,7 @@ struct sakura_workspace_model {
 	GPtrArray *pages;
 	GPtrArray *panes;
 	GPtrArray *tasks;
+	GPtrArray *bookmarks; /* SakuraSessionBookmarkRecord *, owned. */
 	SakuraGroup *active_group;
 	SakuraTask *active_task;
 	SakuraPage *active_page;
@@ -200,6 +201,7 @@ struct sakura_app {
 	GtkWidget *sidebar;
 	GtkWidget *sidebar_title;
 	GtkWidget *sidebar_tree;
+	GtkWidget *bookmarks_menu;
 	GtkTreeViewColumn *sidebar_status_column;
 	GtkCellRenderer *sidebar_spinner_renderer;
 	GtkTreeStore *sidebar_model;
@@ -675,6 +677,8 @@ void sakura_tab_close_agent_terminal(SakuraTab *tab);
 void sakura_set_tab_label_text(const gchar *title, gint page);
 void sakura_set_window_title(const gchar *title);
 gboolean sakura_update_tab_cwd(SakuraTab *tab);
+void sakura_tab_run_command(SakuraTab *tab, const gchar *command,
+                            gboolean execute);
 void sakura_update_tab_metadata(SakuraTab *tab, const gchar *raw_title);
 gboolean sakura_terminal_id_is_valid(const gchar *terminal_id);
 gchar *sakura_generate_terminal_id(void);
@@ -795,6 +799,7 @@ GtkWidget *sakura_codex_rename_menu_item_new(SakuraTab *tab);
 void sakura_install_codex_hook_cb(GtkWidget *widget, void *data);
 void sakura_close_tab_cb(GtkWidget *widget, void *data);
 void sakura_sidebar_init(gboolean restore_session);
+void sakura_sidebar_bookmarks_refresh(void);
 void sakura_sidebar_selection_changed_cb(GtkTreeSelection *selection, void *data);
 void sakura_sidebar_primary_click(SakuraSidebarNode *node);
 void sakura_sidebar_cancel_primary_click(void);
@@ -1050,6 +1055,9 @@ void sakura_startup_terminal_start_pending(SakuraApp *app, gboolean pending);
 gboolean sakura_agent_start(SakuraApp *app);
 void sakura_agent_apply_pending_snapshot(SakuraApp *app);
 GHashTable *sakura_agent_fetch_terminal_cwds(const GPtrArray *terminal_ids);
+gboolean sakura_agent_upsert_bookmark(
+	const SakuraSessionBookmarkRecord *bookmark, GError **error);
+gboolean sakura_agent_delete_bookmark(const gchar *bookmark_id, GError **error);
 struct sakura_agent_terminal_start_result {
 	SakuraApp *app;
 	gchar *requested_terminal_id;

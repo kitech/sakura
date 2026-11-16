@@ -3,6 +3,9 @@
 
 static void sakura_control_fill_job(Sakura__Control__V1__Job *message,
 	const SakuraSessionJobRecord *job);
+static void sakura_control_fill_bookmark(
+	Sakura__Control__V1__Bookmark *message,
+	const SakuraSessionBookmarkRecord *bookmark);
 
 #include <string.h>
 
@@ -1283,6 +1286,52 @@ gboolean sakura_control_encode_run_job_request(const gchar *request_id,
 
 
 gboolean
+sakura_control_encode_upsert_bookmark_request(
+	const gchar *request_id, const SakuraSessionBookmarkRecord *bookmark,
+	GByteArray *payload)
+{
+	Sakura__Control__V1__Bookmark wire = SAKURA__CONTROL__V1__BOOKMARK__INIT;
+	Sakura__Control__V1__UpsertBookmarkRequest upsert =
+		SAKURA__CONTROL__V1__UPSERT_BOOKMARK_REQUEST__INIT;
+	Sakura__Control__V1__Request request =
+		SAKURA__CONTROL__V1__REQUEST__INIT;
+
+	if (request_id == NULL || request_id[0] == '\0' || bookmark == NULL ||
+	    bookmark->id == NULL || bookmark->id[0] == '\0' ||
+	    bookmark->command == NULL || bookmark->command[0] == '\0' ||
+	    payload == NULL)
+		return FALSE;
+	sakura_control_fill_bookmark(&wire, bookmark);
+	upsert.bookmark = &wire;
+	request.request_id = (gchar *)request_id;
+	request.body_case = SAKURA__CONTROL__V1__REQUEST__BODY_UPSERT_BOOKMARK;
+	request.upsert_bookmark = &upsert;
+	return sakura_control_pack_message(&request.base, payload);
+}
+
+
+gboolean
+sakura_control_encode_delete_bookmark_request(const gchar *request_id,
+	                                          const gchar *bookmark_id,
+	                                          GByteArray *payload)
+{
+	Sakura__Control__V1__DeleteBookmarkRequest remove =
+		SAKURA__CONTROL__V1__DELETE_BOOKMARK_REQUEST__INIT;
+	Sakura__Control__V1__Request request =
+		SAKURA__CONTROL__V1__REQUEST__INIT;
+
+	if (request_id == NULL || request_id[0] == '\0' || bookmark_id == NULL ||
+	    bookmark_id[0] == '\0' || payload == NULL)
+		return FALSE;
+	remove.id = (gchar *)bookmark_id;
+	request.request_id = (gchar *)request_id;
+	request.body_case = SAKURA__CONTROL__V1__REQUEST__BODY_DELETE_BOOKMARK;
+	request.delete_bookmark = &remove;
+	return sakura_control_pack_message(&request.base, payload);
+}
+
+
+gboolean
 sakura_control_encode_subscribe_events_request(const gchar *request_id,
 	                                             guint64 after_sequence,
 	                                             GByteArray *payload)
@@ -1417,6 +1466,26 @@ sakura_control_decode_request(const guint8 *payload,
 			request->kind = SAKURA_CONTROL_REQUEST_GET_TERMINAL_CWD;
 			request->terminal_id = g_strdup(
 				decoded->get_terminal_cwd->terminal_id);
+		}
+		break;
+	case SAKURA__CONTROL__V1__REQUEST__BODY_UPSERT_BOOKMARK:
+		if (decoded->upsert_bookmark != NULL &&
+		    decoded->upsert_bookmark->bookmark != NULL) {
+			Sakura__Control__V1__Bookmark *bookmark =
+				decoded->upsert_bookmark->bookmark;
+
+			request->kind = SAKURA_CONTROL_REQUEST_UPSERT_BOOKMARK;
+			request->target_id = g_strdup(bookmark->id);
+			request->title = g_strdup(bookmark->name);
+			request->cwd = g_strdup(bookmark->command);
+			request->order = bookmark->order;
+			request->has_order = TRUE;
+		}
+		break;
+	case SAKURA__CONTROL__V1__REQUEST__BODY_DELETE_BOOKMARK:
+		if (decoded->delete_bookmark != NULL) {
+			request->kind = SAKURA_CONTROL_REQUEST_DELETE_BOOKMARK;
+			request->target_id = g_strdup(decoded->delete_bookmark->id);
 		}
 		break;
 	case SAKURA__CONTROL__V1__REQUEST__BODY_LIST_FILES:
@@ -1750,6 +1819,18 @@ sakura_control_fill_job(Sakura__Control__V1__Job *message,
 
 
 static void
+sakura_control_fill_bookmark(Sakura__Control__V1__Bookmark *message,
+                             const SakuraSessionBookmarkRecord *bookmark)
+{
+	sakura__control__v1__bookmark__init(message);
+	message->id = (gchar *)sakura_control_string(bookmark->id);
+	message->name = (gchar *)sakura_control_string(bookmark->name);
+	message->command = (gchar *)sakura_control_string(bookmark->command);
+	message->order = bookmark->order;
+}
+
+
+static void
 sakura_control_fill_page(Sakura__Control__V1__Page *message,
                          const SakuraCorePage *page)
 {
@@ -1871,6 +1952,18 @@ sakura_control_fill_snapshot(
 		}
 		snapshot->n_jobs = workspace->jobs->len;
 	}
+	if (workspace->bookmarks != NULL && workspace->bookmarks->len != 0) {
+		snapshot->bookmarks = g_new0(
+			Sakura__Control__V1__Bookmark *, workspace->bookmarks->len);
+		for (guint index = 0; index < workspace->bookmarks->len; index++) {
+			Sakura__Control__V1__Bookmark *message = g_new0(
+				Sakura__Control__V1__Bookmark, 1);
+			sakura_control_fill_bookmark(message,
+			                             g_ptr_array_index(workspace->bookmarks, index));
+			snapshot->bookmarks[index] = message;
+		}
+		snapshot->n_bookmarks = workspace->bookmarks->len;
+	}
 
 	snapshot->active_group_id = (gchar *)sakura_control_string(
 		workspace->active_group != NULL ? workspace->active_group->id : "root");
@@ -1897,11 +1990,14 @@ sakura_control_free_snapshot_messages(
 		g_free(snapshot->pages[index]);
 	for (gsize index = 0; index < snapshot->n_jobs; index++)
 		g_free(snapshot->jobs[index]);
+	for (gsize index = 0; index < snapshot->n_bookmarks; index++)
+		g_free(snapshot->bookmarks[index]);
 	g_free(snapshot->groups);
 	g_free(snapshot->tasks);
 	g_free(snapshot->terminals);
 	g_free(snapshot->pages);
 	g_free(snapshot->jobs);
+	g_free(snapshot->bookmarks);
 }
 
 
@@ -2584,6 +2680,18 @@ sakura_control_decode_workspace_snapshot(
 		job->last_status = g_strdup(wire_job->last_status);
 		job->last_error = g_strdup(wire_job->last_error);
 		g_ptr_array_add(decoded_snapshot->jobs, job);
+	}
+	for (gsize index = 0; index < wire_snapshot->n_bookmarks; index++) {
+		Sakura__Control__V1__Bookmark *wire_bookmark =
+			wire_snapshot->bookmarks[index];
+		SakuraSessionBookmarkRecord *bookmark =
+			g_new0(SakuraSessionBookmarkRecord, 1);
+
+		bookmark->id = g_strdup(wire_bookmark->id);
+		bookmark->name = g_strdup(wire_bookmark->name);
+		bookmark->command = g_strdup(wire_bookmark->command);
+		bookmark->order = wire_bookmark->order;
+		g_ptr_array_add(decoded_snapshot->bookmarks, bookmark);
 	}
 	(void)sequence;
 	*snapshot = decoded_snapshot;

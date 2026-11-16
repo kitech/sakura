@@ -564,6 +564,27 @@ sakura_paste ()
 }
 
 
+/* Insert a saved command into a terminal. VTE writes to the pty that fronts the
+ * agent, so this follows the same path as typing or pasting. */
+void
+sakura_tab_run_command(SakuraTab *tab, const gchar *command, gboolean execute)
+{
+	gchar *line;
+
+	if (tab == NULL || tab->vte == NULL || command == NULL ||
+	    command[0] == '\0')
+		return;
+	if (!execute) {
+		vte_terminal_feed_child(VTE_TERMINAL(tab->vte), command,
+		                        (gssize)strlen(command));
+		return;
+	}
+	line = g_strconcat(command, "\n", NULL);
+	vte_terminal_feed_child(VTE_TERMINAL(tab->vte), line, (gssize)strlen(line));
+	g_free(line);
+}
+
+
 void
 sakura_paste_primary ()
 {

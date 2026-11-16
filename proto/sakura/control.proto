@@ -79,6 +79,13 @@ message Job {
   string last_error = 13;
 }
 
+message Bookmark {
+  string id = 1;
+  string name = 2;
+  string command = 3;
+  uint32 order = 4;
+}
+
 message WorkspaceSnapshot {
   repeated Group groups = 1;
   repeated Task tasks = 2;
@@ -90,6 +97,7 @@ message WorkspaceSnapshot {
   repeated Page pages = 8;
   uint64 workspace_revision = 9;
   repeated Job jobs = 10;
+  repeated Bookmark bookmarks = 11;
 }
 
 message UpsertJobRequest {
@@ -103,6 +111,9 @@ message SetJobEnabledRequest {
 
 message DeleteJobRequest { string name = 1; }
 message RunJobRequest { string name = 1; }
+
+message UpsertBookmarkRequest { Bookmark bookmark = 1; }
+message DeleteBookmarkRequest { string id = 1; }
 
 message EntityRef {
   string kind = 1;
@@ -369,6 +380,8 @@ message Request {
     DeleteJobRequest delete_job = 36;
     RunJobRequest run_job = 37;
     GetTerminalCwdRequest get_terminal_cwd = 38;
+    UpsertBookmarkRequest upsert_bookmark = 39;
+    DeleteBookmarkRequest delete_bookmark = 40;
   }
   uint64 expected_revision = 23;
   bool has_expected_revision = 24;

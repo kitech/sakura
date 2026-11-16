@@ -422,6 +422,11 @@ sakura_workspace_model_snapshot_new(const SakuraWorkspaceModel *model,
 			sakura_workspace_snapshot_append_layout(snapshot, page,
 			                                      page->layout_root);
 	}
+	for (guint index = 0; model->bookmarks != NULL &&
+	                     index < model->bookmarks->len; index++)
+		g_ptr_array_add(snapshot->bookmarks,
+		                sakura_session_bookmark_record_copy(
+			                g_ptr_array_index(model->bookmarks, index)));
 	g_ptr_array_unref(model_panes);
 	return snapshot;
 }

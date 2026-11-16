@@ -115,6 +115,22 @@ static gboolean sakura_agent_persist_workspace(SakuraAgent *agent,
 	GError **error);
 static gboolean sakura_agent_error(GError **error, const gchar *message);
 
+static SakuraSessionBookmarkRecord *
+sakura_agent_find_bookmark(SakuraAgent *agent, const gchar *id)
+{
+	for (guint index = 0; agent != NULL && agent->workspace != NULL &&
+	                     agent->workspace->bookmarks != NULL &&
+	                     index < agent->workspace->bookmarks->len; index++) {
+		SakuraSessionBookmarkRecord *bookmark = g_ptr_array_index(
+			agent->workspace->bookmarks, index);
+
+		if (bookmark != NULL && g_strcmp0(bookmark->id, id) == 0)
+			return bookmark;
+	}
+	return NULL;
+}
+
+
 static SakuraSessionJobRecord *
 sakura_agent_find_job(SakuraAgent *agent, const gchar *name)
 {
@@ -2769,6 +2785,54 @@ sakura_agent_manage_job(SakuraAgent *agent, const SakuraControlRequest *request,
 }
 
 static gboolean
+sakura_agent_upsert_bookmark(SakuraAgent *agent,
+	                        const SakuraControlRequest *request,
+	                        GError **error)
+{
+	SakuraSessionBookmarkRecord *bookmark;
+
+	if (request->target_id == NULL || request->target_id[0] == '\0' ||
+	    request->title == NULL || request->title[0] == '\0' ||
+	    request->cwd == NULL || request->cwd[0] == '\0')
+		return sakura_agent_error(error,
+			"bookmark requires id, name, and command");
+	bookmark = sakura_agent_find_bookmark(agent, request->target_id);
+	if (bookmark == NULL) {
+		bookmark = g_new0(SakuraSessionBookmarkRecord, 1);
+		bookmark->id = g_strdup(request->target_id);
+		bookmark->order = request->has_order
+		                ? request->order
+		                : agent->workspace->bookmarks->len;
+		g_ptr_array_add(agent->workspace->bookmarks, bookmark);
+	}
+	g_free(bookmark->name);
+	bookmark->name = g_strdup(request->title);
+	g_free(bookmark->command);
+	bookmark->command = g_strdup(request->cwd);
+	if (request->has_order)
+		bookmark->order = request->order;
+	return TRUE;
+}
+
+
+static gboolean
+sakura_agent_delete_bookmark(SakuraAgent *agent,
+	                         const SakuraControlRequest *request,
+	                         GError **error)
+{
+	SakuraSessionBookmarkRecord *bookmark =
+		sakura_agent_find_bookmark(agent, request->target_id);
+
+	if (bookmark == NULL) {
+		g_set_error(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+		            "bookmark %s was not found", request->target_id);
+		return FALSE;
+	}
+	return g_ptr_array_remove(agent->workspace->bookmarks, bookmark);
+}
+
+
+static gboolean
 sakura_agent_apply_request(SakuraAgent *agent,
 	                         const SakuraControlRequest *request,
 	                         gchar **accepted_id,
@@ -2785,6 +2849,12 @@ sakura_agent_apply_request(SakuraAgent *agent,
 	case SAKURA_CONTROL_REQUEST_DELETE_JOB:
 	case SAKURA_CONTROL_REQUEST_RUN_JOB:
 		changed = sakura_agent_manage_job(agent, request, error);
+		break;
+	case SAKURA_CONTROL_REQUEST_UPSERT_BOOKMARK:
+		changed = sakura_agent_upsert_bookmark(agent, request, error);
+		break;
+	case SAKURA_CONTROL_REQUEST_DELETE_BOOKMARK:
+		changed = sakura_agent_delete_bookmark(agent, request, error);
 		break;
 	case SAKURA_CONTROL_REQUEST_CREATE_GROUP:
 		changed = sakura_agent_create_group(agent, request, error);
@@ -2918,6 +2988,9 @@ sakura_agent_request_changes_workspace(SakuraControlRequestKind kind)
 	case SAKURA_CONTROL_REQUEST_SET_JOB_ENABLED:
 	case SAKURA_CONTROL_REQUEST_DELETE_JOB:
 	case SAKURA_CONTROL_REQUEST_RUN_JOB:
+		return TRUE;
+	case SAKURA_CONTROL_REQUEST_UPSERT_BOOKMARK:
+	case SAKURA_CONTROL_REQUEST_DELETE_BOOKMARK:
 		return TRUE;
 	default:
 		return FALSE;

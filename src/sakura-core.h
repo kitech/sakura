@@ -88,6 +88,13 @@ typedef struct {
 
 typedef struct {
 	gchar *id;
+	gchar *name;
+	gchar *command;
+	guint order;
+} SakuraSessionBookmarkRecord;
+
+typedef struct {
+	gchar *id;
 	gchar *parent_id;
 	gchar *title;
 	gchar *directory;
@@ -177,6 +184,7 @@ struct sakura_session_snapshot {
 	GPtrArray *layouts;
 	GPtrArray *expanded_sidebar_nodes;
 	GPtrArray *jobs;
+	GPtrArray *bookmarks;
 	gchar *workspace_id;
 	gint selected_terminal;
 	gchar *selected_terminal_id;
@@ -256,6 +264,7 @@ struct sakura_core_workspace {
 	GPtrArray *pages;  /* SakuraCorePage *, owned. */
 	GPtrArray *terminals; /* SakuraCoreTerminal *, owned. */
 	GPtrArray *jobs; /* SakuraSessionJobRecord *, owned. */
+	GPtrArray *bookmarks; /* SakuraSessionBookmarkRecord *, owned. */
 	SakuraCoreGroup *active_group; /* Borrowed. */
 	SakuraCoreTask *active_task; /* Borrowed. */
 };
@@ -270,6 +279,9 @@ void sakura_session_snapshot_save(const SakuraSessionSnapshot *snapshot,
 SakuraSessionJobRecord *sakura_session_job_record_copy(
 	const SakuraSessionJobRecord *record);
 void sakura_session_job_record_free(SakuraSessionJobRecord *record);
+SakuraSessionBookmarkRecord *sakura_session_bookmark_record_copy(
+	const SakuraSessionBookmarkRecord *record);
+void sakura_session_bookmark_record_free(SakuraSessionBookmarkRecord *record);
 
 SakuraCoreWorkspace *sakura_core_workspace_new(void);
 void sakura_core_workspace_free(SakuraCoreWorkspace *workspace);
