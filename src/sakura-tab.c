@@ -22,6 +22,7 @@
 #define _(String) gettext(String)
 
 static void sakura_tab_create_chrome(SakuraTab *tab);
+static void sakura_tab_force_agent_size_sync(SakuraTab *tab);
 static void sakura_tab_materialize_terminal(SakuraTab *tab);
 
 #define TAB_MAX_SIZE 40
@@ -791,6 +792,9 @@ sakura_tab_finish_agent_terminal_start(
 		if (attached_status != 0)
 			sakura_tab_agent_status(tab, attached_status, "terminal attached");
 	}
+	/* A restored tab may still carry the 80x24 fallback that was sent before
+	 * its first allocation; always align the agent pty with the widget. */
+	sakura_tab_force_agent_size_sync(tab);
 	return TRUE;
 
 fail:
@@ -1055,6 +1059,7 @@ sakura_tab_resume_agent_terminal(SakuraTab *tab)
 	                              replay_start_offset, replay_end_offset);
 	if (attached_status != 0)
 		sakura_tab_agent_status(tab, attached_status, "terminal reattached");
+	sakura_tab_force_agent_size_sync(tab);
 	g_free(replay_data);
 	return TRUE;
 }
@@ -1137,6 +1142,8 @@ sakura_tab_start_deferred_runtime(SakuraTab *tab)
 		sakura_tab_set_status(tab, SAKURA_TAB_STATUS_ERROR, TRUE);
 		return FALSE;
 	}
+	/* The start request raced the first allocation for deferred tabs. */
+	sakura_tab_force_agent_size_sync(tab);
 	return TRUE;
 }
 
@@ -1288,7 +1295,9 @@ sakura_tab_sync_agent_size(SakuraTab *tab)
 		return;
 	cols = vte_terminal_get_column_count(VTE_TERMINAL(tab->vte));
 	rows = vte_terminal_get_row_count(VTE_TERMINAL(tab->vte));
-	if (cols == 0 || rows == 0 || (cols == tab->agent_cols && rows == tab->agent_rows))
+	if (cols == 0 || rows == 0)
+		return;
+	if (cols == tab->agent_cols && rows == tab->agent_rows)
 		return;
 	if (!sakura_agent_terminal_resize(&sakura, tab->terminal_id, cols, rows,
 	                                  &error)) {
@@ -1299,6 +1308,38 @@ sakura_tab_sync_agent_size(SakuraTab *tab)
 	}
 	tab->agent_cols = cols;
 	tab->agent_rows = rows;
+}
+
+
+static gboolean
+sakura_tab_force_agent_size_idle_cb(gpointer data)
+{
+	gchar *terminal_id = data;
+	SakuraTab *tab = sakura_find_pane_by_terminal_id(terminal_id);
+
+	if (tab != NULL) {
+		tab->agent_cols = 0;
+		tab->agent_rows = 0;
+		sakura_tab_sync_agent_size(tab);
+	}
+	g_free(terminal_id);
+	return G_SOURCE_REMOVE;
+}
+
+
+/* CREATE/RESTART carries an 80x24 fallback when a restored tab is materialized
+ * on selection and has not been allocated yet. Forget the bookkeeping so the
+ * real widget grid is sent, once now and once after the first layout pass. */
+static void
+sakura_tab_force_agent_size_sync(SakuraTab *tab)
+{
+	if (tab == NULL || tab->terminal_id == NULL)
+		return;
+	tab->agent_cols = 0;
+	tab->agent_rows = 0;
+	sakura_tab_sync_agent_size(tab);
+	g_idle_add(sakura_tab_force_agent_size_idle_cb,
+	           g_strdup(tab->terminal_id));
 }
 
 
@@ -1997,6 +2038,17 @@ sakura_tab_agent_size_allocate_cb(GtkWidget *widget, GtkAllocation *allocation,
 
 
 static void
+sakura_tab_char_size_changed_cb(VteTerminal *terminal, guint char_width,
+                                guint char_height, gpointer data)
+{
+	(void)terminal;
+	(void)char_width;
+	(void)char_height;
+	sakura_tab_force_agent_size_sync(data);
+}
+
+
+static void
 sakura_tab_materialize_terminal(SakuraTab *tab)
 {
 	gint64 trace_started;
@@ -2026,6 +2078,10 @@ sakura_tab_materialize_terminal(SakuraTab *tab)
 	g_signal_connect(G_OBJECT(tab->vte), "key-press-event", G_CALLBACK(sakura_tab_keypress_cb), tab);
 	g_signal_connect(G_OBJECT(tab->vte), "size-allocate",
 	                 G_CALLBACK(sakura_tab_agent_size_allocate_cb), tab);
+	/* Changing the font or the scale alters the column/row count without
+	 * necessarily reallocating the widget, so size-allocate alone misses it. */
+	g_signal_connect(G_OBJECT(tab->vte), "char-size-changed",
+	                 G_CALLBACK(sakura_tab_char_size_changed_cb), tab);
 	gtk_widget_show(tab->vte);
 	gtk_widget_show(tab->scrollbar);
 	sakura_ui_latency_trace_end("vte-materialize", trace_started);
