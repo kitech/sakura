@@ -2592,6 +2592,8 @@ sakura_agent_spawn_process(SakuraApp *app, const gchar *socket_path,
 	GSubprocess *process;
 	gchar *binary;
 	gchar *workspace_path = NULL;
+	GSubprocessLauncher *launcher;
+	const gchar *term;
 
 	binary = sakura_agent_binary_path();
 	if (binary == NULL) {
@@ -2599,20 +2601,27 @@ sakura_agent_spawn_process(SakuraApp *app, const gchar *socket_path,
 		                    "sakura-agent was not found");
 		return NULL;
 	}
+	/* The terminal emulator owns TERM for its child processes. Set it via
+	 * the child's environment instead of calling g_setenv() here (unsafe
+	 * after gtk_init()). Config value first, xterm-256color as fallback. */
+	term = (app->term != NULL && app->term[0] != '\0')
+	       ? app->term : "xterm-256color";
+	launcher = g_subprocess_launcher_new(
+		G_SUBPROCESS_FLAGS_STDOUT_SILENCE |
+		G_SUBPROCESS_FLAGS_STDERR_SILENCE);
+	g_subprocess_launcher_setenv(launcher, "TERM", term, TRUE);
+
 	if (app->sessionfile != NULL && app->sessionfile[0] != '\0') {
 		workspace_path = g_strdup_printf("%s.workspace", app->sessionfile);
-		process = g_subprocess_new(
-			G_SUBPROCESS_FLAGS_STDOUT_SILENCE |
-			G_SUBPROCESS_FLAGS_STDERR_SILENCE,
-			error, binary, "--socket", socket_path, "--workspace-id",
-			app->workspace_id, "--session", app->sessionfile,
-			"--workspace-file", workspace_path, NULL);
+		process = g_subprocess_launcher_spawn(
+			launcher, error, binary, "--socket", socket_path,
+			"--workspace-id", app->workspace_id, "--session",
+			app->sessionfile, "--workspace-file", workspace_path, NULL);
 	} else
-		process = g_subprocess_new(
-			G_SUBPROCESS_FLAGS_STDOUT_SILENCE |
-			G_SUBPROCESS_FLAGS_STDERR_SILENCE,
-			error, binary, "--socket", socket_path, "--workspace-id",
-			app->workspace_id, NULL);
+		process = g_subprocess_launcher_spawn(
+			launcher, error, binary, "--socket", socket_path,
+			"--workspace-id", app->workspace_id, NULL);
+	g_object_unref(launcher);
 	g_free(binary);
 	g_free(workspace_path);
 	return process;

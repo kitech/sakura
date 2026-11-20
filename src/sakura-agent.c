@@ -1937,9 +1937,9 @@ sakura_agent_create_terminal_with_kind(SakuraAgent *agent,
 	if (create.child_pid == 0) {
 		if (chdir(cwd) != 0)
 			_exit(127);
-		/* A persistent agent may itself have been started without TERM
-		 * (e.g. from a DE launcher). The inherited GUI value already
-		 * carries the configured term; only fill in a missing one. */
+		/* A persistent agent may have been started by an older GUI without
+		 * TERM. Our own launcher passes the configured term down, so only
+		 * fill in a missing value here. Safe: fork() leaves one thread. */
 		{
 			const gchar *term = g_getenv("TERM");
 			if (term == NULL || term[0] == '\0')
