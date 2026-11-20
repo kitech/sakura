@@ -74,6 +74,10 @@ sakura_startup_finish(void)
 	sakura.session_restoring = FALSE;
 	sakura_agent_apply_pending_snapshot(&sakura);
 	sakura.session_ready = TRUE;
+	/* Re-assert sidebar visibility after async restore, in case the session
+	 * snapshot changed sakura.sidebar_visible since widget construction. */
+	if (sakura.sidebar != NULL)
+		gtk_widget_set_visible(sakura.sidebar, sakura.sidebar_visible);
 	if (!sakura.startup.options.new_window &&
 	    !sakura.startup.preserve_failed_session) {
 		sakura_session_mark_dirty();

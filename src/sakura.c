@@ -2653,6 +2653,17 @@ sakura_init()
 
 	/* Default terminal. Only in config file */
 	sakura.term = g_key_file_get_value(sakura.cfg, cfg_group, "term", NULL);
+	/* DE launchers (Exec=sakura) have no parent terminal, so TERM is unset.
+	 * Prefer the configured value; fall back to xterm-256color only when
+	 * neither the environment nor the config provides one. */
+	{
+		const gchar *effective_term =
+		    (sakura.term != NULL && sakura.term[0] != '\0')
+		    ? sakura.term : "xterm-256color";
+		const gchar *current_term = g_getenv("TERM");
+		if (current_term == NULL || current_term[0] == '\0')
+			g_setenv("TERM", effective_term, TRUE);
+	}
 	sakura.session_lock_fd = -1;
 
 	if (!sakura.dont_save) {

@@ -1937,6 +1937,14 @@ sakura_agent_create_terminal_with_kind(SakuraAgent *agent,
 	if (create.child_pid == 0) {
 		if (chdir(cwd) != 0)
 			_exit(127);
+		/* A persistent agent may itself have been started without TERM
+		 * (e.g. from a DE launcher). The inherited GUI value already
+		 * carries the configured term; only fill in a missing one. */
+		{
+			const gchar *term = g_getenv("TERM");
+			if (term == NULL || term[0] == '\0')
+				setenv("TERM", "xterm-256color", 1);
+		}
 		if (codex) {
 			if (agent->tracking_dir != NULL)
 				setenv("SAKURA_CODEX_TRACKING_DIR", agent->tracking_dir, 1);

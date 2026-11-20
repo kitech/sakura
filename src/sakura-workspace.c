@@ -6588,10 +6588,12 @@ sakura_sidebar_init (gboolean restore_session)
 	gtk_paned_set_position(GTK_PANED(sakura.sidebar_paned), sakura.sidebar_width);
 	g_signal_connect(sakura.sidebar_paned, "notify::position",
 	                 G_CALLBACK(sakura_sidebar_paned_position_cb), NULL);
+	/* sakura_startup_init_ui() calls show_all() on this widget's parent later.
+	 * Without no_show_all that would re-show a sidebar hidden here. */
+	gtk_widget_set_no_show_all(sakura.sidebar, TRUE);
 	gtk_widget_show_all(sakura.sidebar_paned);
 	sakura_sidebar_bookmarks_refresh();
-	if (!sakura.sidebar_visible)
-		gtk_widget_hide(sakura.sidebar);
+	gtk_widget_set_visible(sakura.sidebar, sakura.sidebar_visible);
 	sakura_tab_bar_refresh();
 }
 
