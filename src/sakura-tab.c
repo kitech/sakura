@@ -786,9 +786,9 @@ sakura_tab_finish_agent_terminal_start(
 			tab->agent_cols = attached_cols;
 		if (attached_rows != 0)
 			tab->agent_rows = attached_rows;
-		tab->agent_last_output_offset = replay_end_offset;
 		sakura_tab_agent_feed_output(tab, replay_data, replay_length,
 		                              replay_start_offset, replay_end_offset);
+		tab->agent_last_output_offset = replay_end_offset;
 		if (attached_status != 0)
 			sakura_tab_agent_status(tab, attached_status, "terminal attached");
 	}
@@ -1054,9 +1054,9 @@ sakura_tab_resume_agent_terminal(SakuraTab *tab)
 
 	tab->agent_cols = attached_cols != 0 ? attached_cols : cols;
 	tab->agent_rows = attached_rows != 0 ? attached_rows : rows;
-	tab->agent_last_output_offset = replay_end_offset;
 	sakura_tab_agent_feed_output(tab, replay_data, replay_length,
 	                              replay_start_offset, replay_end_offset);
+	tab->agent_last_output_offset = replay_end_offset;
 	if (attached_status != 0)
 		sakura_tab_agent_status(tab, attached_status, "terminal reattached");
 	sakura_tab_force_agent_size_sync(tab);
